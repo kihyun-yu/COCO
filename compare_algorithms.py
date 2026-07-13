@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from html import escape
 
 import numpy as np
+from tqdm import tqdm
 
 from algorithms import (
     COCOWithoutSlater2026,
@@ -87,12 +88,11 @@ def save_plot(
     rounds: np.ndarray,
     series: dict[str, list[float]],
     ylabel: str,
-    title: str,
     path: Path,
     confidence_intervals: dict[str, tuple[list[float], list[float]]] | None = None,
 ) -> None:
     width, height = 960, 600
-    left, right, top, bottom = 90, 30, 55, 80
+    left, right, top, bottom = 110, 30, 30, 90
     plot_width = width - left - right
     plot_height = height - top - bottom
     colors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c"]
@@ -108,10 +108,20 @@ def save_plot(
         y_min -= 1.0
         y_max += 1.0
     padding = 0.05 * (y_max - y_min)
-    y_min -= padding
-    y_max += padding
-    x_min = float(rounds[0])
-    x_max = float(rounds[-1])
+    padded_y_min = y_min - padding
+    padded_y_max = y_max + padding
+
+    # Use only integer and half-integer tick values. This avoids labels such as
+    # 17.37 while retaining a consistent scale across the four plots.
+    y_step = _half_integer_tick_step(padded_y_max - padded_y_min)
+    y_min = math.floor(padded_y_min / y_step) * y_step
+    y_max = math.ceil(padded_y_max / y_step) * y_step
+    if math.isclose(y_min, y_max):
+        y_max = y_min + y_step
+
+    # Align the horizontal axis and grid to exact multiples of 1,000.
+    x_min = 0.0
+    x_max = max(1000.0, math.ceil(float(rounds[-1]) / 1000.0) * 1000.0)
 
     def x_coord(x: float) -> float:
         if math.isclose(x_min, x_max):
@@ -121,23 +131,23 @@ def save_plot(
     def y_coord(y: float) -> float:
         return top + (y_max - y) / (y_max - y_min) * plot_height
 
-    y_ticks = np.linspace(y_min, y_max, 6)
-    x_ticks = np.linspace(x_min, x_max, 6)
+    y_ticks = np.arange(y_min, y_max + 0.5 * y_step, y_step)
+    x_ticks = np.arange(0.0, x_max + 1.0, 1000.0)
     elements = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="white"/>',
-        f'<text x="{width / 2}" y="28" text-anchor="middle" font-family="Arial" font-size="20" font-weight="bold">{escape(title)}</text>',
     ]
 
     for y in y_ticks:
         yy = y_coord(float(y))
         elements.append(f'<line x1="{left}" y1="{yy:.2f}" x2="{width - right}" y2="{yy:.2f}" stroke="#e5e7eb"/>')
-        elements.append(f'<text x="{left - 10}" y="{yy + 4:.2f}" text-anchor="end" font-family="Arial" font-size="12">{y:.2f}</text>')
+        tick_label = str(int(round(y))) if math.isclose(y, round(y)) else f"{y:.1f}"
+        elements.append(f'<text x="{left - 12}" y="{yy + 6:.2f}" text-anchor="end" font-family="Arial" font-size="16">{tick_label}</text>')
 
     for x in x_ticks:
         xx = x_coord(float(x))
         elements.append(f'<line x1="{xx:.2f}" y1="{top}" x2="{xx:.2f}" y2="{height - bottom}" stroke="#f3f4f6"/>')
-        elements.append(f'<text x="{xx:.2f}" y="{height - bottom + 22}" text-anchor="middle" font-family="Arial" font-size="12">{int(round(x))}</text>')
+        elements.append(f'<text x="{xx:.2f}" y="{height - bottom + 28}" text-anchor="middle" font-family="Arial" font-size="16">{int(x)}</text>')
 
     zero_y = y_coord(0.0)
     if top <= zero_y <= height - bottom:
@@ -145,8 +155,17 @@ def save_plot(
 
     elements.append(f'<line x1="{left}" y1="{top}" x2="{left}" y2="{height - bottom}" stroke="#111827" stroke-width="1.2"/>')
     elements.append(f'<line x1="{left}" y1="{height - bottom}" x2="{width - right}" y2="{height - bottom}" stroke="#111827" stroke-width="1.2"/>')
-    elements.append(f'<text x="{width / 2}" y="{height - 25}" text-anchor="middle" font-family="Arial" font-size="14">Number of interactions (round)</text>')
-    elements.append(f'<text x="24" y="{height / 2}" transform="rotate(-90 24 {height / 2})" text-anchor="middle" font-family="Arial" font-size="14">{escape(ylabel)}</text>')
+    elements.append(f'<text x="{width / 2}" y="{height - 24}" text-anchor="middle" font-family="Arial" font-size="19">Number of interactions (round)</text>')
+    elements.append(f'<text x="28" y="{height / 2}" transform="rotate(-90 28 {height / 2})" text-anchor="middle" font-family="Arial" font-size="19">{escape(ylabel)}</text>')
+
+    legend_x = left + 18
+    legend_y = top + 16
+    legend_width = 230
+    legend_height = 32 + 30 * len(series)
+    elements.append(
+        f'<rect x="{legend_x - 10}" y="{legend_y - 16}" width="{legend_width}" '
+        f'height="{legend_height}" rx="5" fill="white" fill-opacity="0.88" stroke="#d1d5db"/>'
+    )
 
     for idx, (label, values) in enumerate(series.items()):
         color = colors[idx % len(colors)]
@@ -167,13 +186,34 @@ def save_plot(
             for x, y in zip(rounds, values)
         )
         elements.append(f'<polyline fill="none" stroke="{color}" stroke-width="2.4" points="{points}"/>')
-        legend_y = top + 22 + idx * 22
-        legend_x = left + 20
-        elements.append(f'<line x1="{legend_x}" y1="{legend_y}" x2="{legend_x + 28}" y2="{legend_y}" stroke="{color}" stroke-width="2.4"/>')
-        elements.append(f'<text x="{legend_x + 36}" y="{legend_y + 4}" font-family="Arial" font-size="13">{escape(label)}</text>')
+        row_y = legend_y + 12 + idx * 30
+        elements.append(f'<line x1="{legend_x}" y1="{row_y}" x2="{legend_x + 34}" y2="{row_y}" stroke="{color}" stroke-width="3"/>')
+        elements.append(f'<text x="{legend_x + 44}" y="{row_y + 6}" font-family="Arial" font-size="16">{escape(_plot_legend_label(label))}</text>')
 
     elements.append("</svg>")
     path.write_text("\n".join(elements), encoding="utf-8")
+
+
+def _half_integer_tick_step(y_range: float) -> float:
+    """Return a readable tick interval whose values stay on half-integers."""
+
+    target = max(y_range / 6.0, 0.5)
+    magnitude = 10.0 ** math.floor(math.log10(target))
+    for multiplier in (1.0, 2.0, 5.0, 10.0):
+        candidate = multiplier * magnitude
+        if candidate >= target and candidate >= 0.5:
+            return candidate
+    return max(10.0 * magnitude, 0.5)
+
+
+def _plot_legend_label(label: str) -> str:
+    if "known T" in label:
+        return "Yu2017 (known T)"
+    if "doubling" in label:
+        return "Yu2017 (doubling)"
+    if "2026" in label:
+        return "Ours"
+    return label
 
 
 def save_result_plots(
@@ -200,7 +240,6 @@ def save_result_plots(
         rounds,
         result.history.regret,
         "Cumulative regret",
-        "Regret vs. interactions",
         regret_path,
         None if result.confidence_intervals is None else result.confidence_intervals.regret,
     )
@@ -208,7 +247,6 @@ def save_result_plots(
         rounds,
         result.history.violation,
         "Cumulative constraint violation",
-        "Constraint violation vs. interactions",
         violation_path,
         None if result.confidence_intervals is None else result.confidence_intervals.violation,
     )
@@ -216,7 +254,6 @@ def save_result_plots(
         rounds,
         _normalize_series(result.history.regret, rounds),
         "Average regret",
-        "Average regret vs. interactions",
         normalized_regret_path,
         None
         if result.confidence_intervals is None
@@ -226,7 +263,6 @@ def save_result_plots(
         rounds,
         _normalize_series(result.history.violation, rounds),
         "Average constraint violation",
-        "Average constraint violation vs. interactions",
         normalized_violation_path,
         None
         if result.confidence_intervals is None
@@ -265,24 +301,37 @@ def run_comparison(
     practical_regularizer_scale: float = 0.1,
     problem_name: str = "slater",
     slater_margin: float = 0.0,
-    complexity: str = "complicated",
+    complexity: str = "simple",
+    show_progress: bool = False,
 ) -> ComparisonResult:
     if num_runs <= 0:
         raise ValueError("num_runs must be positive")
-    results = [
-        _run_single_comparison(
-            rounds_count=rounds_count,
-            dim=dim,
-            seed=seed + run_idx,
-            high_probability=high_probability,
-            practical_gamma_scale=practical_gamma_scale,
-            practical_regularizer_scale=practical_regularizer_scale,
-            problem_name=problem_name,
-            slater_margin=slater_margin,
-            complexity=complexity,
-        )
-        for run_idx in range(num_runs)
-    ]
+    progress = tqdm(
+        total=num_runs * rounds_count,
+        desc="COCO experiment",
+        unit="round",
+        disable=not show_progress,
+        dynamic_ncols=True,
+    )
+    results = []
+    try:
+        for run_idx in range(num_runs):
+            results.append(
+                _run_single_comparison(
+                    rounds_count=rounds_count,
+                    dim=dim,
+                    seed=seed + run_idx,
+                    high_probability=high_probability,
+                    practical_gamma_scale=practical_gamma_scale,
+                    practical_regularizer_scale=practical_regularizer_scale,
+                    problem_name=problem_name,
+                    slater_margin=slater_margin,
+                    complexity=complexity,
+                    progress=progress,
+                )
+            )
+    finally:
+        progress.close()
     if num_runs == 1:
         return results[0]
     return _aggregate_results(results)
@@ -298,11 +347,14 @@ def _run_single_comparison(
     problem_name: str,
     slater_margin: float,
     complexity: str,
+    progress: tqdm | None = None,
 ) -> ComparisonResult:
-    if dim < 2:
-        raise ValueError("--dim must be at least 2 for the conflicting stochastic constraints")
+    if not 2 <= dim <= 10:
+        raise ValueError("--dim must be between 2 and 10")
 
-    rng = np.random.default_rng(seed)
+    loss_seed, constraint_seed = np.random.SeedSequence(seed).spawn(2)
+    loss_rng = np.random.default_rng(loss_seed)
+    constraint_rng = np.random.default_rng(constraint_seed)
     problem = make_problem(problem_name, dim=dim, slater_margin=slater_margin, complexity=complexity)
     box = problem.feasible_set
     x0 = np.full(dim, 0.5)
@@ -310,7 +362,9 @@ def _run_single_comparison(
 
     # Conservative bounds for this synthetic problem.
     L = max(math.sqrt(dim), math.sqrt(2.0))
-    G = 1.0
+    # A conservative absolute constraint-value bound on [0, 1]^dim,
+    # including the bounded stochastic intercept shocks.
+    G = float(dim + 2)
     D = box.diameter
 
     alg_2017_known_t = YuNeelyWei2017(
@@ -352,7 +406,9 @@ def _run_single_comparison(
     constraint_counts = np.zeros(3 if problem_name == "slater" else 2, dtype=int)
 
     for round_index in range(1, rounds_count + 1):
-        loss, constraint, constraint_type = problem.sample_round(rng, round_index)
+        loss, constraint, constraint_type = problem.sample_round(
+            loss_rng, round_index, constraint_rng=constraint_rng
+        )
         constraint_counts[constraint_type] += 1
         outputs = {
             labels[0]: alg_2017_known_t.step(loss, [constraint]),
@@ -370,6 +426,8 @@ def _run_single_comparison(
                 metrics[label].violation += float(out["constraint"])
             history.regret[label].append(metrics[label].regret)
             history.violation[label].append(metrics[label].violation)
+        if progress is not None:
+            progress.update(1)
 
     round_wise_feasible = problem.round_wise_feasible_region_nonempty(constraint_counts)
     expected_constraint_at_comparator = problem.expected_constraint(comparator)

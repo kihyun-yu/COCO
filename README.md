@@ -5,7 +5,14 @@ This repository implements algorithms from the two papers in `./papers`:
 - `1708.03741v1.pdf`: Yu, Neely, Wei (2017), Algorithm 1 for online convex optimization with stochastic constraints.
 - `2606.31480v1.pdf`: Yu, Lee, Lee (2026), Algorithm 1 for constrained online convex optimization without Slater's condition.
 
-The code is intentionally small and dependency-light. It requires NumPy.
+The code is intentionally small and dependency-light. It requires NumPy and
+uses tqdm to display experiment progress.
+
+Install the dependencies with:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
 
 ## Run Tests
 
@@ -23,22 +30,30 @@ The experiment scripts accept practical COCO26 tuning parameters, a complexity
 mode, and the number of independent runs to average:
 
 ```bash
-bash run/default_experiment.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs>
-bash run/gradual_slater_sweep.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <rounds>
+bash run/default_experiment.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <dim>
+bash run/high_probability_experiment.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <dim>
+bash run/gradual_slater_sweep.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <rounds> <dim>
 ```
 
 For example:
 
 ```bash
-bash run/default_experiment.sh 10 0.25 simple 10
-bash run/default_experiment.sh 20 0.1 complicated 10
-bash run/gradual_slater_sweep.sh 20 0.1 complicated 10 10000
+bash run/default_experiment.sh 10 0.25 simple 10 8
+bash run/default_experiment.sh 20 0.1 complicated 10 10
+bash run/gradual_slater_sweep.sh 320 0.001 simple 10 10000 5
 ```
 
 You can also pass custom arguments through the main runner:
 
 ```bash
 bash run/main.sh --rounds 2000 --seed 3
+```
+
+Progress is shown over all runs and rounds. Disable it when redirecting output
+or running in automation:
+
+```bash
+bash run/main.sh --no-progress
 ```
 
 The comparison includes a practical tuned COCO26 curve. Its tuning knobs scale
@@ -48,10 +63,17 @@ the paper's Lyapunov parameter `gamma_t` and the dual regularizer:
 bash run/main.sh --practical-gamma-scale 20 --practical-regularizer-scale 0.1
 ```
 
-The Python entry point defaults to theorem-safe scaling, `gamma x1` and
+The Python entry point defaults to a 5-dimensional solution space, a simple
+quadratic objective with affine constraints, theorem-safe scaling, `gamma x1`, and
 `regularizer x1`. The provided experiment scripts default to the finite-horizon
 empirical setting `gamma x20` and `regularizer x0.1`, but you can override both
-through the positional arguments above. The default complexity is `complicated`.
+through the positional arguments above. Dimensions from 2 through 10 are supported;
+use `--complexity complicated` to opt into the composite objective.
+
+For dimensions above 2, the simple quadratic is normalized to the original 2D
+scale, the comparator uses the long-run center on extra coordinates, and the
+constraint random stream is kept independent of dimension. These choices make
+the default 5D plots comparable to the original experiment.
 
 For the high-probability parameter choice of the 2026 algorithm:
 
@@ -64,6 +86,12 @@ To see Slater's condition vanish gradually:
 ```bash
 bash run/gradual_slater_sweep.sh
 ```
+
+The gradual-Slater sweep defaults to the finite-horizon visualization tuning
+`gamma x320` and `regularizer x0.001`. On the near-zero-margin 5D experiment,
+this makes COCO2026 react more strongly to accumulated constraint violation and
+keeps its violation curve below the two 2017 baselines. These are empirical
+plotting defaults; the Python entry point retains the theorem-safe `x1` values.
 
 This writes cumulative and normalized plots to `./result`:
 
@@ -141,8 +169,11 @@ constraint COCO algorithms.
 The gradual sweep uses
 
 ```text
-E[g_t(x)] = x[0] + x[1] + 0.08*(x[0]^2 + x[1]^2) - margin <= 0
+E[g_t(x)] = sum_i x[i] + 0.08*sum_i x[i]^2 - margin <= 0
 ```
+
+All decision coordinates participate in this constraint. The boundary
+comparator distributes the margin symmetrically across all dimensions.
 
 When `margin > 0`, Slater's condition holds with strict feasible point `x = 0`.
 When `margin = 0`, Slater's condition fails. The sweep runs margins

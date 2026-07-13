@@ -21,6 +21,42 @@ from sets import BoxSet
 
 
 class AlgorithmTests(unittest.TestCase):
+    def test_problem_defaults_to_simple_five_dimensional_objective(self):
+        problem = ConflictingStochasticConstraints()
+        loss, constraint, _ = problem.sample_round(np.random.default_rng(0), round_index=1)
+
+        self.assertEqual(problem.dim, 5)
+        self.assertIsInstance(loss, QuadraticFunction)
+        self.assertIsInstance(constraint, AffineFunction)
+        self.assertEqual(loss.center.shape, (5,))
+        self.assertAlmostEqual(loss.weight, 0.4)
+
+    def test_solution_dimension_is_capped_at_ten(self):
+        with self.assertRaisesRegex(ValueError, "between 2 and 10"):
+            ConflictingStochasticConstraints(dim=11)
+
+    def test_extra_comparator_coordinates_match_average_loss_center(self):
+        problem = ConflictingStochasticConstraints(dim=5)
+        np.testing.assert_allclose(problem.comparator[2:], 0.525)
+
+    def test_constraint_stream_is_independent_of_solution_dimension(self):
+        problem_2d = ConflictingStochasticConstraints(dim=2)
+        problem_5d = ConflictingStochasticConstraints(dim=5)
+        loss_rng_2d = np.random.default_rng(1)
+        loss_rng_5d = np.random.default_rng(1)
+        constraint_rng_2d = np.random.default_rng(2)
+        constraint_rng_5d = np.random.default_rng(2)
+
+        samples_2d = [
+            problem_2d.sample_round(loss_rng_2d, t, constraint_rng_2d)[2]
+            for t in range(1, 30)
+        ]
+        samples_5d = [
+            problem_5d.sample_round(loss_rng_5d, t, constraint_rng_5d)[2]
+            for t in range(1, 30)
+        ]
+        self.assertEqual(samples_2d, samples_5d)
+
     def test_plain_python_lists_are_accepted_for_vectors(self):
         box = BoxSet(lower=[0.0, 0.0], upper=[1.0, 1.0])
         loss = AffineFunction(a=[1.0, 0.0])
@@ -88,6 +124,18 @@ class AlgorithmTests(unittest.TestCase):
 
         self.assertLess(slater_problem.expected_constraint(np.zeros(2)), 0.0)
         self.assertEqual(no_slater_limit.expected_constraint(np.zeros(2)), 0.0)
+
+    def test_gradual_slater_constraint_uses_every_coordinate(self):
+        problem = GradualSlaterStochasticConstraints(dim=5, margin=0.1)
+        _, constraint, _ = problem.sample_round(
+            np.random.default_rng(1),
+            round_index=1,
+            constraint_rng=np.random.default_rng(2),
+        )
+
+        np.testing.assert_allclose(constraint.gradient(np.zeros(5)), np.ones(5))
+        np.testing.assert_allclose(problem.comparator, np.full(5, 0.02))
+        self.assertAlmostEqual(problem.expected_constraint(problem.comparator), 0.0)
 
     def test_yu_neely_wei_2017_updates_inside_box_and_nonnegative_queue(self):
         box = BoxSet(lower=np.zeros(2), upper=np.ones(2))

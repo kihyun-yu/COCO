@@ -8,12 +8,14 @@ export MKL_ENABLE_INSTRUCTIONS="${MKL_ENABLE_INSTRUCTIONS:-SSE4_2}"
 
 GAMMA_SCALE="${1:-20}"
 REGULARIZER_SCALE="${2:-0.1}"
-COMPLEXITY="${3:-complicated}"
+COMPLEXITY="${3:-simple}"
 RUNS="${4:-10}"
+DIM="${5:-5}"
 
 python3 main.py \
   --rounds 1000 \
   --runs "$RUNS" \
+  --dim "$DIM" \
   --seed 0 \
   --high-probability \
   --complexity "$COMPLEXITY" \

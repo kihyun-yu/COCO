@@ -14,15 +14,16 @@ _MKL_SSE_WARNING = "Intel MKL WARNING: Support of Intel(R) Streaming SIMD Extens
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rounds", type=int, default=1000)
-    parser.add_argument("--runs", type=int, default=10)
-    parser.add_argument("--dim", type=int, default=2)
+    parser.add_argument("--runs", type=int, default=5)
+    parser.add_argument("--dim", type=int, choices=range(2, 11), default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--problem", choices=["slater", "no-slater", "gradual-slater"], default="slater")
-    parser.add_argument("--complexity", choices=["simple", "complicated"], default="complicated")
+    parser.add_argument("--complexity", choices=["simple", "complicated"], default="simple")
     parser.add_argument("--slater-margin", type=float, default=0.0)
     parser.add_argument("--high-probability", action="store_true")
     parser.add_argument("--practical-gamma-scale", type=float, default=1.0)
     parser.add_argument("--practical-regularizer-scale", type=float, default=1.0)
+    parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--result-dir", type=Path, default=Path("result"))
     parser.add_argument("--regret-dir", type=Path, default=None)
     parser.add_argument("--violation-dir", type=Path, default=None)
@@ -87,6 +88,7 @@ def main() -> None:
         problem_name=args.problem,
         slater_margin=args.slater_margin,
         complexity=args.complexity,
+        show_progress=not args.no_progress,
     )
     (
         regret_path,

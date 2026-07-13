@@ -42,19 +42,22 @@ class AffineFunction:
 
 @dataclass(frozen=True)
 class QuadraticFunction:
-    """Convex quadratic f(x) = 0.5 ||x - center||_2^2."""
+    """Convex quadratic f(x) = 0.5 * weight * ||x - center||_2^2."""
 
     center: np.ndarray
+    weight: float = 1.0
 
     def __post_init__(self) -> None:
+        if self.weight < 0:
+            raise ValueError("weight must be nonnegative")
         object.__setattr__(self, "center", _as_float_vector(self.center, "center"))
 
     def value(self, x: np.ndarray) -> float:
         diff = _as_float_vector(x, "x") - self.center
-        return float(0.5 * np.dot(diff, diff))
+        return float(0.5 * self.weight * np.dot(diff, diff))
 
     def gradient(self, x: np.ndarray) -> np.ndarray:
-        return _as_float_vector(x, "x") - self.center
+        return self.weight * (_as_float_vector(x, "x") - self.center)
 
 
 @dataclass(frozen=True)

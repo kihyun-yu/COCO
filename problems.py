@@ -19,6 +19,10 @@ from sets import BoxSet
 
 
 CONSTRAINT_INTERCEPT_NOISE_SCALE = 0.16
+MIN_SOLUTION_DIM = 2
+MAX_SOLUTION_DIM = 10
+DEFAULT_SOLUTION_DIM = 5
+EXTRA_COORDINATE_CENTER = 0.525
 SLATER_NOISE_MAGNITUDE = 0.35
 NOISE_SHOCK_PROBABILITY = 0.22
 NOISE_SHOCK_MULTIPLIER = 4.0
@@ -44,13 +48,12 @@ class ConflictingStochasticConstraints:
         E[g_t(x)] = 0.35 * (x[0] + x[1]) + nonlinear terms - 0.275 <= 0.
     """
 
-    dim: int = 2
+    dim: int = DEFAULT_SOLUTION_DIM
     probabilities: tuple[float, float, float] = (0.45, 0.45, 0.10)
-    complexity: str = "complicated"
+    complexity: str = "simple"
 
     def __post_init__(self) -> None:
-        if self.dim < 2:
-            raise ValueError("dim must be at least 2")
+        _validate_dim(self.dim)
         if not np.isclose(sum(self.probabilities), 1.0):
             raise ValueError("probabilities must sum to 1")
         _validate_complexity(self.complexity)
@@ -61,7 +64,7 @@ class ConflictingStochasticConstraints:
 
     @property
     def comparator(self) -> np.ndarray:
-        x = np.full(self.dim, 0.9)
+        x = np.full(self.dim, EXTRA_COORDINATE_CENTER)
         boundary_value = (
             0.275 / 0.7
             if self.complexity == "simple"
@@ -116,17 +119,23 @@ class ConflictingStochasticConstraints:
         return probabilities / float(np.sum(probabilities))
 
     def sample_round(
-        self, rng: np.random.Generator, round_index: int = 0
+        self,
+        rng: np.random.Generator,
+        round_index: int = 0,
+        constraint_rng: np.random.Generator | None = None,
     ) -> tuple[ConvexFunction, ConvexFunction, int]:
         loss = _scheduled_loss(rng, self.dim, round_index, self.complexity)
+        constraint_rng = rng if constraint_rng is None else constraint_rng
         intercept_noise = _bounded_zero_mean_noise(
-            rng,
+            constraint_rng,
             scale=_time_varying_noise_scale(CONSTRAINT_INTERCEPT_NOISE_SCALE, round_index),
             shock_probability=NOISE_SHOCK_PROBABILITY,
             shock_multiplier=NOISE_SHOCK_MULTIPLIER,
         )
 
-        constraint_type = int(rng.choice(3, p=self.constraint_probabilities(round_index)))
+        constraint_type = int(
+            constraint_rng.choice(3, p=self.constraint_probabilities(round_index))
+        )
         if constraint_type == 0:
             a = np.zeros(self.dim)
             a[0] = 1.0
@@ -169,21 +178,20 @@ class NoSlaterStochasticConstraints:
     """Stochastic COCO problem where Slater's condition fails.
 
     The expected constraint is
-        E[g_t(x)] = x[0] + x[1] <= 0
+        E[g_t(x)] = sum_i x[i] <= 0
     on X = [0, 1]^d.  Thus the expected feasible set is non-empty, but it is
     the singleton {(0, 0, ...)}, so no point satisfies E[g_t(x)] < 0.
 
-    Realized constraints are g_t(x) = x[0] + x[1] + noise_t with zero-mean
+    Realized constraints are g_t(x) = sum_i x[i] + noise_t with zero-mean
     bounded noise.  Whenever noise_t > 0, the round-wise feasible set is empty.
     """
 
-    dim: int = 2
+    dim: int = DEFAULT_SOLUTION_DIM
     noise_magnitude: float = SLATER_NOISE_MAGNITUDE
-    complexity: str = "complicated"
+    complexity: str = "simple"
 
     def __post_init__(self) -> None:
-        if self.dim < 2:
-            raise ValueError("dim must be at least 2")
+        _validate_dim(self.dim)
         if self.noise_magnitude <= 0:
             raise ValueError("noise_magnitude must be positive")
         _validate_complexity(self.complexity)
@@ -198,19 +206,23 @@ class NoSlaterStochasticConstraints:
 
     def expected_constraint(self, x: np.ndarray) -> float:
         if self.complexity == "simple":
-            return float(x[0] + x[1])
-        return float(x[0] + x[1] + 0.08 * (x[0] * x[0] + x[1] * x[1]))
+            return float(np.sum(x))
+        return float(np.sum(x) + 0.08 * np.dot(x, x))
 
     def round_wise_feasible_region_nonempty(self, constraint_counts: np.ndarray) -> bool:
         return int(np.asarray(constraint_counts)[1]) == 0
 
     def sample_round(
-        self, rng: np.random.Generator, round_index: int = 0
+        self,
+        rng: np.random.Generator,
+        round_index: int = 0,
+        constraint_rng: np.random.Generator | None = None,
     ) -> tuple[ConvexFunction, ConvexFunction, int]:
         loss = _scheduled_loss(rng, self.dim, round_index, self.complexity)
+        constraint_rng = rng if constraint_rng is None else constraint_rng
 
         noise = _bounded_zero_mean_noise(
-            rng,
+            constraint_rng,
             scale=_time_varying_noise_scale(self.noise_magnitude, round_index),
             shock_probability=NOISE_SHOCK_PROBABILITY,
             shock_multiplier=NOISE_SHOCK_MULTIPLIER,
@@ -224,21 +236,20 @@ class GradualSlaterStochasticConstraints:
     """Stochastic COCO problem with controllable Slater margin.
 
     The expected constraint is
-        E[g_t(x)] = x[0] + x[1] - margin <= 0.
+        E[g_t(x)] = sum_i x[i] - margin <= 0.
 
     If margin > 0, Slater's condition holds because x = 0 has expected
     constraint -margin.  If margin = 0, this reduces to the no-Slater singleton
     feasible set.  Decreasing margin therefore makes Slater-ness gradual.
     """
 
-    dim: int = 2
+    dim: int = DEFAULT_SOLUTION_DIM
     margin: float = 0.1
     noise_magnitude: float = SLATER_NOISE_MAGNITUDE
-    complexity: str = "complicated"
+    complexity: str = "simple"
 
     def __post_init__(self) -> None:
-        if self.dim < 2:
-            raise ValueError("dim must be at least 2")
+        _validate_dim(self.dim)
         if self.margin < 0:
             raise ValueError("margin must be nonnegative")
         if self.noise_magnitude <= 0:
@@ -251,20 +262,17 @@ class GradualSlaterStochasticConstraints:
 
     @property
     def comparator(self) -> np.ndarray:
-        x = np.zeros(self.dim)
         boundary_value = (
-            self.margin / 2.0
+            self.margin / self.dim
             if self.complexity == "simple"
-            else _margin_symmetric_boundary(self.margin)
+            else _margin_symmetric_boundary(self.margin, self.dim)
         )
-        x[0] = boundary_value
-        x[1] = boundary_value
-        return x
+        return np.full(self.dim, boundary_value)
 
     def expected_constraint(self, x: np.ndarray) -> float:
         if self.complexity == "simple":
-            return float(x[0] + x[1] - self.margin)
-        return float(x[0] + x[1] + 0.08 * (x[0] * x[0] + x[1] * x[1]) - self.margin)
+            return float(np.sum(x) - self.margin)
+        return float(np.sum(x) + 0.08 * np.dot(x, x) - self.margin)
 
     def round_wise_feasible_region_nonempty(self, constraint_counts: np.ndarray) -> bool:
         if self.margin >= self.noise_magnitude * NOISE_SHOCK_MULTIPLIER:
@@ -272,12 +280,16 @@ class GradualSlaterStochasticConstraints:
         return int(np.asarray(constraint_counts)[1]) == 0
 
     def sample_round(
-        self, rng: np.random.Generator, round_index: int = 0
+        self,
+        rng: np.random.Generator,
+        round_index: int = 0,
+        constraint_rng: np.random.Generator | None = None,
     ) -> tuple[ConvexFunction, ConvexFunction, int]:
         loss = _scheduled_loss(rng, self.dim, round_index, self.complexity)
+        constraint_rng = rng if constraint_rng is None else constraint_rng
 
         noise = _bounded_zero_mean_noise(
-            rng,
+            constraint_rng,
             scale=_time_varying_noise_scale(self.noise_magnitude, round_index),
             shock_probability=NOISE_SHOCK_PROBABILITY,
             shock_multiplier=NOISE_SHOCK_MULTIPLIER,
@@ -290,7 +302,7 @@ def make_problem(
     name: str,
     dim: int,
     slater_margin: float = 0.0,
-    complexity: str = "complicated",
+    complexity: str = "simple",
 ) -> ConflictingStochasticConstraints | NoSlaterStochasticConstraints | GradualSlaterStochasticConstraints:
     if name == "slater":
         return ConflictingStochasticConstraints(dim=dim, complexity=complexity)
@@ -306,6 +318,13 @@ def _validate_complexity(complexity: str) -> None:
         raise ValueError("complexity must be either 'simple' or 'complicated'")
 
 
+def _validate_dim(dim: int) -> None:
+    if not MIN_SOLUTION_DIM <= dim <= MAX_SOLUTION_DIM:
+        raise ValueError(
+            f"dim must be between {MIN_SOLUTION_DIM} and {MAX_SOLUTION_DIM}"
+        )
+
+
 def _scheduled_loss(
     rng: np.random.Generator,
     dim: int,
@@ -314,7 +333,8 @@ def _scheduled_loss(
 ) -> ConvexFunction:
     center = _scheduled_center(rng, dim, round_index)
     if complexity == "simple":
-        return QuadraticFunction(center=center)
+        # Match the original 2D objective scale while keeping all coordinates active.
+        return QuadraticFunction(center=center, weight=2.0 / dim)
     return _scheduled_composite_loss(rng, dim, round_index, center)
 
 
@@ -344,15 +364,17 @@ def _scheduled_center(
     if dim > 2:
         oscillation[2:] = 0.10 * np.sin(2.0 * np.pi * (t + np.arange(dim - 2)) / 29.0)
 
-    jitter = rng.normal(0.0, LOSS_CENTER_JITTER_SCALE, size=dim)
+    jitter = rng.normal(0.0, LOSS_CENTER_JITTER_SCALE, size=MAX_SOLUTION_DIM)[:dim]
     center = center + oscillation + jitter
 
     if rng.random() < LOSS_CENTER_SHOCK_PROBABILITY:
-        center = center + rng.choice([-1.0, 1.0], size=dim) * rng.uniform(0.25, 0.65, size=dim)
+        shock_sign = rng.choice([-1.0, 1.0], size=MAX_SOLUTION_DIM)[:dim]
+        shock_size = rng.uniform(0.25, 0.65, size=MAX_SOLUTION_DIM)[:dim]
+        center = center + shock_sign * shock_size
     if t % 17 == 0:
         center[:2] = 1.0 - center[:2]
     if t % 53 == 0:
-        center = rng.uniform(0.0, 1.0, size=dim)
+        center = rng.uniform(0.0, 1.0, size=MAX_SOLUTION_DIM)[:dim]
 
     return np.clip(center, 0.0, 1.0)
 
@@ -417,14 +439,10 @@ def _loss_linear_tilt(
 
 
 def _margin_constraint(dim: int, margin: float, noise: float, complexity: str) -> ConvexFunction:
-    a = np.zeros(dim)
-    a[0] = 1.0
-    a[1] = 1.0
+    a = np.ones(dim)
     if complexity == "simple":
         return AffineFunction(a=a, b=noise - margin)
-    H = np.zeros((dim, dim))
-    H[0, 0] = 0.16
-    H[1, 1] = 0.16
+    H = 0.16 * np.eye(dim)
     return PSDQuadraticFunction(H=H, center=np.zeros(dim), a=a, b=noise - margin)
 
 
@@ -454,8 +472,8 @@ def _conflicting_symmetric_boundary() -> float:
     return float((-0.7 + np.sqrt(0.7 * 0.7 + 4.0 * 0.09 * 0.275)) / (2.0 * 0.09))
 
 
-def _margin_symmetric_boundary(margin: float) -> float:
+def _margin_symmetric_boundary(margin: float, dim: int) -> float:
     if margin == 0:
         return 0.0
-    # Solve 2*s + 0.16*s^2 - margin = 0.
-    return float((-2.0 + np.sqrt(4.0 + 0.64 * margin)) / 0.32)
+    # Solve dim*s + 0.08*dim*s^2 - margin = 0.
+    return float((-dim + np.sqrt(dim * dim + 0.32 * dim * margin)) / (0.16 * dim))
