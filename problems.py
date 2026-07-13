@@ -24,7 +24,6 @@ MAX_SOLUTION_DIM = 10
 DEFAULT_SOLUTION_DIM = 5
 EXTRA_COORDINATE_CENTER = 0.5
 SLATER_NOISE_MAGNITUDE = 0.35
-LOSS_CENTER_NOISE_MAGNITUDE = 0.10
 LOSS_LINEAR_NOISE_SCALE = 0.42
 LOSS_LINEAR_SHOCK_PROBABILITY = 0.26
 LOSS_LINEAR_SHOCK_MULTIPLIER = 3.5
@@ -326,17 +325,13 @@ def _scheduled_center(
     dim: int,
     round_index: int,
 ) -> np.ndarray:
+    # Keep c_t deterministic: every coordinate follows the same 60-round
+    # cycle, spending 30 rounds at each endpoint.
+    del rng
     t = max(1, int(round_index))
     block = (t - 1) // 30
     base_value = 0.8 if block % 2 == 0 else 0.2
-    center = np.full(dim, base_value)
-
-    center_noise = rng.uniform(
-        -LOSS_CENTER_NOISE_MAGNITUDE,
-        LOSS_CENTER_NOISE_MAGNITUDE,
-        size=MAX_SOLUTION_DIM,
-    )[:dim]
-    return center + center_noise
+    return np.full(dim, base_value)
 
 
 def _scheduled_composite_loss(

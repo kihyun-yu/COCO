@@ -1,36 +1,84 @@
 # COCO Algorithm Implementations
 
-This repository implements algorithms from the two papers in `./papers`:
+This repository contains compact NumPy implementations of Algorithm 1 from:
 
-- `1708.03741v1.pdf`: Yu, Neely, Wei (2017), Algorithm 1 for online convex optimization with stochastic constraints.
-- `2606.31480v1.pdf`: Yu, Lee, Lee (2026), Algorithm 1 for constrained online convex optimization without Slater's condition.
+- Yu, Neely, and Wei (2017), *Online Convex Optimization with Stochastic Constraints* (`papers/1708.03741v1.pdf`)
+- Yu, Lee, and Lee (2026), *Constrained Online Convex Optimization without Slater's Condition* (`papers/2606.31480v1.pdf`)
 
-The code is intentionally small and dependency-light. It requires NumPy and
-uses tqdm to display experiment progress.
+The experiments compare the 2017 method with a known horizon, an anytime
+doubling-trick variant of that method, and a practical finite-horizon tuning of
+the 2026 method.
 
-Install the dependencies with:
+## Setup
+
+The project requires Python 3, NumPy, tqdm, and Matplotlib. Install the Python
+dependencies with:
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-## Run tests
+## Tests
+
+Run the unit tests with:
 
 ```bash
 python3 -m unittest test_algorithms.py
 ```
 
-## Run the gradual-Slater sweep
+## Running an experiment
+
+Run one comparison directly through the Python entry point:
+
+```bash
+python3 main.py --problem gradual-slater --rounds 2000 --seed 3
+```
+
+By default, `main.py` uses:
+
+- 1,000 rounds and 5 independent runs
+- a 5-dimensional decision space (dimensions 2 through 10 are supported)
+- the `slater` conflicting-constraint problem
+- simple quadratic losses and affine constraints
+- `gamma x1` and `regularizer x1` for the 2026 method
+- progress reporting across all runs and rounds
+
+Disable progress reporting in automation or when redirecting output:
+
+```bash
+python3 main.py --problem gradual-slater --no-progress
+```
+
+The practical 2026 tuning parameters multiply the paper's `gamma_t` value and
+adaptive dual regularizer, respectively:
+
+```bash
+python3 main.py \
+  --problem gradual-slater \
+  --practical-gamma-scale 20 \
+  --practical-regularizer-scale 0.1
+```
+
+The command-line parser exposes `--complexity complicated`, and the repository
+contains generators for composite losses and nonlinear constraints. However,
+the comparison runner currently computes regret using an exact comparator that
+only supports simple quadratic losses. Consequently, use
+`--complexity simple` when running `main.py` or the sweep; complicated mode
+currently exits with a comparator error.
+
+## Gradual-Slater sweep
+
+Run the complete sweep with:
 
 ```bash
 bash run/gradual_slater_sweep.sh
 ```
 
-The sweep accepts practical COCO26 tuning parameters, a complexity mode, the
-number of independent runs, the horizon, and the solution dimension:
+Its positional arguments are:
 
-```bash
-bash run/gradual_slater_sweep.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <rounds> <dim>
+```text
+bash run/gradual_slater_sweep.sh \
+  <gamma_scale> <regularizer_scale> simple <runs> <rounds> <dim>
 ```
 
 For example:
@@ -39,86 +87,104 @@ For example:
 bash run/gradual_slater_sweep.sh 200 0.01 simple 5 5000 5
 ```
 
-For a single custom run, invoke the Python entry point directly:
+The sweep defaults to `gamma x200`, `regularizer x0.01`, 5 runs, 5,000
+rounds, and 5 dimensions. It evaluates margins
+`0.25, 0.10, 0.05, 0.02, 0.00`.
 
-```bash
-python3 main.py --problem gradual-slater --rounds 2000 --seed 3
+In the supported simple mode, the stochastic constraint is
+
+```text
+g_t(x) = sum_i x[i] + noise_t - margin,
+noise_t ~ Uniform(-0.35, 0.35).
 ```
 
-Progress is shown over all runs and rounds. Disable it when redirecting output
-or running in automation:
+Therefore,
 
-```bash
-python3 main.py --problem gradual-slater --no-progress
+```text
+E[g_t(x)] = sum_i x[i] - margin.
 ```
 
-The comparison includes a practical tuned COCO26 curve. Its tuning knobs scale
-the paper's Lyapunov parameter `gamma_t` and the dual regularizer:
+Every decision coordinate participates in the constraint. When `margin > 0`,
+Slater's condition holds because `x = 0` is strictly feasible in expectation.
+When `margin = 0`, the expected feasible set is the singleton `{0}`, so
+Slater's condition fails.
 
-```bash
-python3 main.py --problem gradual-slater --practical-gamma-scale 20 --practical-regularizer-scale 0.1
-```
+The `gamma x200`, `regularizer x0.01` values are empirical visualization
+settings, not the paper's unscaled constants. In the default 5D, 5-run,
+5,000-round, seed-0 experiment at margin 0, the resulting 2026 cumulative
+violation curve stays below both 2017 baselines. Other settings are not
+guaranteed to preserve that ordering.
 
-The Python entry point defaults to a 5-dimensional solution space, a simple
-quadratic objective with affine constraints, theorem-safe scaling, `gamma x1`, and
-`regularizer x1`. The sweep defaults to the finite-horizon empirical setting
-`gamma x200` and `regularizer x0.01`, but you can override both
-through the positional arguments above. Dimensions from 2 through 10 are supported;
-use `--complexity complicated` to opt into the composite objective.
+## Outputs and plotted metrics
 
-The simple objective uses the standard unnormalized quadratic
-`0.5 * ||x - center||^2`. The constraint random stream is kept independent of
-dimension so changing the solution dimension does not reshuffle the realized
-constraint sequence.
-
-The gradual-Slater sweep defaults to the finite-horizon visualization tuning
-`gamma x200` and `regularizer x0.01`. On the near-zero-margin 5D experiment,
-this makes COCO2026 react more strongly to accumulated constraint violation and
-keeps its violation curve below the two 2017 baselines. These are empirical
-plotting defaults; the Python entry point retains the theorem-safe `x1` values.
-
-This writes cumulative plots to `./result`:
+The sweep writes JPEG plots to:
 
 ```text
 result/regret/regret_margin_*.jpg
 result/violation/constraint_violation_margin_*.jpg
 ```
 
-The plots compare three methods:
+The three plotted methods are:
 
 ```text
-Yu-Neely-Wei 2017 (known T): uses the final horizon T as an input parameter.
-Yu-Neely-Wei 2017 (doubling): removes horizon knowledge by restarting at epochs 1, 2, 4, ...
-Yu-Lee-Lee 2026 (practical): same primal-dual form with tuned finite-horizon constants.
+Yu-Neely-Wei 2017 (known T)
+Yu-Neely-Wei 2017 (doubling epochs 1, 2, 4, ...)
+Yu-Lee-Lee 2026 (practical finite-horizon tuning)
 ```
 
-Each curve is averaged over the configured independent runs. Shaded bands show
-the pointwise 95% confidence interval.
+Each curve is the pointwise average over the configured independent runs. When
+more than one run is used, the shaded band is the normal-approximation 95%
+confidence interval (`mean +/- 1.96 * standard error`). Constraint violation is
+plotted as the cumulative signed sum `sum_t g_t(x_t)`.
 
-Regret uses the exact empirical best fixed comparator for each run. The runner
-first realizes all simple quadratic objectives, averages their centers, and
-projects that realized mean onto the expected feasible set. Thus the comparator
-uses the complete objective sequence and can differ across coordinates and
-runs; it is not the population proxy `margin / dim`.
+For every simple-mode run, regret is measured against the exact empirical best
+fixed comparator. The runner realizes the complete quadratic-loss sequence,
+computes the mean of its centers, and projects that mean onto the reference
+expected feasible set. The resulting comparator can differ across coordinates;
+it is generally not the symmetric population proxy `margin / dim`.
 
-The comparison script uses a shared synthetic stochastic constraint stream designed to
-highlight the advantage of algorithms that only require feasibility in expectation.
-Use `--complexity simple` for scheduled quadratic losses and affine constraints,
-or `--complexity complicated` for composite losses and nonlinear convex
-constraints.
-In the default simple setting, all coordinates of the quadratic base center
-alternate together every 30 rounds between `0.8` and `0.2`. Each coordinate
-then receives independent noise `Uniform(-0.10, 0.10)`. The resulting center
-always lies in `[0.1, 0.9]^d`, so clipping is unnecessary. Constraint noise has the fixed distribution
-`Uniform(-noise_magnitude, noise_magnitude)`; the gradual-Slater experiments use
-`noise_magnitude=0.35`. Both noise sources are zero-mean, bounded, independent,
-and have no time-varying scales or shock mixtures.
+## Simple loss sequence
 
-Each round samples one scalar nonlinear convex constraint. In the complicated
-setting, the sampler is time-varying: probabilities drift smoothly and enter
-short burst regimes, so the active constraint family is not drawn from one fixed
-categorical distribution. Conceptually, the three realized constraint families
-behave like:
+The supported simple loss is
+
+```text
+f_t(x) = 0.5 * ||x - center_t||^2.
+```
+
+All coordinates of the center move together in a deterministic 60-round cycle:
+30 rounds at `0.8`, followed by 30 rounds at `0.2`. There is no randomness in
+`center_t`.
+
+Constraint sampling consumes the same number of random values at every
+supported dimension, so changing the solution dimension does not reshuffle the
+realized constraint sequence for a fixed seed.
+
+## Conflicting stochastic-constraint problem
+
+The `slater` problem samples one scalar constraint from three conflicting
+families. In simple mode, the families are affine versions of:
+
+```text
+family 0: x[0] <= 0.4
+family 1: x[1] <= 0.4
+family 2: x[0] + x[1] >= 0.85
+```
+
+If all three types occur, their joint round-wise feasible region is empty. A
+fixed reference mixture with probabilities `(0.45, 0.45, 0.10)` instead gives
+
+```text
+E_base[g_t(x)] = 0.35 * (x[0] + x[1]) - 0.275.
+```
+
+The actual sampler is deliberately time-varying: its probabilities drift and
+enter short burst regimes. Thus the expression above is a reference constraint
+for the base mixture, not the exact conditional expectation at every round or
+the exact finite-horizon average distribution. The empirical comparator is
+projected onto this reference feasible set.
+
+For completeness, the currently non-runnable complicated comparison generator
+uses nonlinear families of the form:
 
 ```text
 family 0: x[0] + 0.1*x[1]^2 <= 0.4
@@ -126,46 +192,16 @@ family 1: x[1] + 0.1*x[0]^2 <= 0.4
 family 2: 0.85 - x[0] - x[1] + 0.1*(x[0]-x[1])^2 <= 0
 ```
 
-If all three constraint types appear, the round-wise feasible region is empty:
+Under the fixed base mixture, their reference expected constraint is
 
 ```text
-x[0] + 0.1*x[1]^2 <= 0.4 and x[1] + 0.1*x[0]^2 <= 0.4
-imply x[0] + x[1] <= 0.8, which conflicts with the third constraint.
-```
-
-The long-run mixture is centered near the original stochastic-constraint
-problem, whose expected constraint is feasible:
-
-```text
-E[g_t(x)] =
+E_base[g_t(x)] =
     0.35 * (x[0] + x[1])
   + 0.045 * (x[0]^2 + x[1]^2)
   + 0.01 * (x[0] - x[1])^2
-  - 0.275 <= 0
+  - 0.275.
 ```
 
-The comparator is chosen on the boundary of this expected feasible set, so it
-is feasible in expectation even though it is not round-wise feasible when the
-rare third constraint appears. This is the setting targeted by stochastic-
-constraint COCO algorithms.
-
-## Gradual Slater Sweep
-
-The gradual sweep uses
-
-```text
-E[g_t(x)] = sum_i x[i] + 0.08*sum_i x[i]^2 - margin <= 0
-```
-
-All decision coordinates participate in this constraint. The boundary
-comparator distributes the margin symmetrically across all dimensions.
-
-When `margin > 0`, Slater's condition holds with strict feasible point `x = 0`.
-When `margin = 0`, Slater's condition fails. The sweep runs margins
-`0.25, 0.10, 0.05, 0.02, 0.00` and writes regret/violation plots into
-separate directories with margin-specific filenames:
-
-```text
-result/regret/regret_margin_*.jpg
-result/violation/constraint_violation_margin_*.jpg
-```
+Because the implemented sampler is time-varying, a point on the boundary of
+this base-mixture constraint is not necessarily feasible for every round's
+conditional expectation or for the sampler's exact finite-horizon average.

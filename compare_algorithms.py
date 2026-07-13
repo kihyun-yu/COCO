@@ -210,14 +210,14 @@ def save_result_plots(
     save_plot(
         rounds,
         result.history.regret,
-        "Cumulative regret",
+        "Regret",
         regret_path,
         None if result.confidence_intervals is None else result.confidence_intervals.regret,
     )
     save_plot(
         rounds,
         result.history.violation,
-        "Cumulative constraint violation",
+        "Constraint Violation",
         violation_path,
         None if result.confidence_intervals is None else result.confidence_intervals.violation,
     )

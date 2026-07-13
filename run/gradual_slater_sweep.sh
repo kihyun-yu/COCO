@@ -15,7 +15,7 @@ RUNS="${4:-5}"
 ROUNDS="${5:-5000}"
 DIM="${6:-5}"
 
-for margin in 0.25 0.10 0.05 0.02 0.0; do
+for margin in 0.25 0.10 0.0; do
   dir_margin="${margin/./_}"
   python3 main.py \
     --problem gradual-slater \

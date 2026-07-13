@@ -107,23 +107,41 @@ class AlgorithmTests(unittest.TestCase):
         problem = ConflictingStochasticConstraints(dim=2)
         first_loss, _, _ = problem.sample_round(np.random.default_rng(0), round_index=1)
         later_loss, _, _ = problem.sample_round(np.random.default_rng(0), round_index=45)
-        probe = np.array([0.4, 0.6])
+        probe = np.array([0.3, 0.4])
 
         self.assertNotAlmostEqual(first_loss.value(probe), later_loss.value(probe))
         self.assertFalse(np.allclose(first_loss.gradient(probe), later_loss.gradient(probe)))
 
-    def test_simple_center_and_constraint_noise_are_uniformly_bounded(self):
+    def test_simple_center_is_deterministic_and_cyclic(self):
         problem = GradualSlaterStochasticConstraints(dim=5, margin=0.1)
-        loss, constraint, _ = problem.sample_round(
+        centers = []
+        for round_index in (1, 30, 31, 60, 61):
+            loss, _, _ = problem.sample_round(
+                np.random.default_rng(round_index),
+                round_index=round_index,
+                constraint_rng=np.random.default_rng(2),
+            )
+            centers.append(loss.center)
+
+        np.testing.assert_allclose(centers[0], np.full(5, 0.8))
+        np.testing.assert_allclose(centers[1], np.full(5, 0.8))
+        np.testing.assert_allclose(centers[2], np.full(5, 0.2))
+        np.testing.assert_allclose(centers[3], np.full(5, 0.2))
+        np.testing.assert_allclose(centers[4], centers[0])
+
+        first_a, _, _ = problem.sample_round(np.random.default_rng(10), round_index=1)
+        first_b, _, _ = problem.sample_round(np.random.default_rng(20), round_index=1)
+        np.testing.assert_allclose(first_a.center, first_b.center)
+
+    def test_constraint_noise_is_uniformly_bounded(self):
+        problem = GradualSlaterStochasticConstraints(dim=5, margin=0.1)
+        _, constraint, _ = problem.sample_round(
             np.random.default_rng(1),
             round_index=1,
             constraint_rng=np.random.default_rng(2),
         )
-        base_center = np.full(5, 0.8)
-        center_noise = loss.center - base_center
         constraint_noise = constraint.b + problem.margin
 
-        self.assertTrue(np.all(np.abs(center_noise) <= 0.10))
         self.assertLessEqual(abs(constraint_noise), problem.noise_magnitude)
 
     def test_problem_complexity_switches_loss_and_constraints(self):
