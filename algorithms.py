@@ -208,11 +208,7 @@ class COCOWithoutSlater2026:
 
         previous_phi_sum = self.phi_prime_sq_sum
         self.phi_prime_sq_sum += phi_prime * phi_prime
-        regularizer = (
-            0.5 * gamma_t * self.config.G * self.config.G
-            + 
-            (self._psi(self.phi_prime_sq_sum) - self._psi(previous_phi_sum)) / phi_prime
-        )
+        regularizer = (self._psi(self.phi_prime_sq_sum) - self._psi(previous_phi_sum)) / phi_prime
 
         loss_value = loss.value(x_t)
         constraint_value = constraint.value(x_t)

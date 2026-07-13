@@ -8,6 +8,8 @@ from pathlib import Path
 import sys
 import threading
 
+import numpy as np
+
 _MKL_SSE_WARNING = "Intel MKL WARNING: Support of Intel(R) Streaming SIMD Extensions 4.2"
 
 
@@ -27,13 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-dir", type=Path, default=Path("result"))
     parser.add_argument("--regret-dir", type=Path, default=None)
     parser.add_argument("--violation-dir", type=Path, default=None)
-    parser.add_argument("--regret-filename", default="regret.svg")
-    parser.add_argument("--violation-filename", default="constraint_violation.svg")
-    parser.add_argument("--normalized-regret-filename", default="normalized_regret.svg")
-    parser.add_argument(
-        "--normalized-violation-filename",
-        default="normalized_constraint_violation.svg",
-    )
+    parser.add_argument("--regret-filename", default="regret.jpg")
+    parser.add_argument("--violation-filename", default="constraint_violation.jpg")
     return parser.parse_args()
 
 
@@ -90,12 +87,7 @@ def main() -> None:
         complexity=args.complexity,
         show_progress=not args.no_progress,
     )
-    (
-        regret_path,
-        violation_path,
-        normalized_regret_path,
-        normalized_violation_path,
-    ) = save_result_plots(
+    regret_path, violation_path = save_result_plots(
         result,
         args.rounds,
         args.result_dir,
@@ -103,8 +95,6 @@ def main() -> None:
         violation_dir=args.violation_dir,
         regret_filename=args.regret_filename,
         violation_filename=args.violation_filename,
-        normalized_regret_filename=args.normalized_regret_filename,
-        normalized_violation_filename=args.normalized_violation_filename,
     )
 
     counts = result.constraint_counts
@@ -132,13 +122,15 @@ def main() -> None:
             f"noise_positive:{counts[1]}"
         )
     print(f"expected_constraint_at_comparator={result.expected_constraint_at_comparator:.6f}")
+    print(
+        "empirical_comparator="
+        f"{np.array2string(result.comparator, precision=6)}"
+    )
     print(f"round_wise_feasible_region_nonempty={result.round_wise_feasible_region_nonempty}")
     for label in result.labels:
         print(summarize(label, result.metrics[label], result.last_x[label]))
     print(f"saved_regret_plot={regret_path}")
     print(f"saved_constraint_violation_plot={violation_path}")
-    print(f"saved_normalized_regret_plot={normalized_regret_path}")
-    print(f"saved_normalized_constraint_violation_plot={normalized_violation_path}")
 
 
 if __name__ == "__main__":

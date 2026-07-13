@@ -12,6 +12,7 @@ from algorithms import (
 )
 from functions import AffineFunction
 from functions import QuadraticFunction
+from compare_algorithms import _exact_empirical_comparator
 from problems import (
     ConflictingStochasticConstraints,
     GradualSlaterStochasticConstraints,
@@ -21,6 +22,18 @@ from sets import BoxSet
 
 
 class AlgorithmTests(unittest.TestCase):
+    def test_empirical_comparator_uses_all_realized_objectives(self):
+        losses = [
+            QuadraticFunction(center=np.array([0.8, 0.2])),
+            QuadraticFunction(center=np.array([0.8, 0.2])),
+        ]
+
+        comparator = _exact_empirical_comparator(
+            losses, problem_name="gradual-slater", slater_margin=0.5
+        )
+
+        np.testing.assert_allclose(comparator, np.array([0.5, 0.0]))
+
     def test_problem_defaults_to_simple_five_dimensional_objective(self):
         problem = ConflictingStochasticConstraints()
         loss, constraint, _ = problem.sample_round(np.random.default_rng(0), round_index=1)
@@ -29,7 +42,7 @@ class AlgorithmTests(unittest.TestCase):
         self.assertIsInstance(loss, QuadraticFunction)
         self.assertIsInstance(constraint, AffineFunction)
         self.assertEqual(loss.center.shape, (5,))
-        self.assertAlmostEqual(loss.weight, 0.4)
+        self.assertAlmostEqual(loss.weight, 1.0)
 
     def test_solution_dimension_is_capped_at_ten(self):
         with self.assertRaisesRegex(ValueError, "between 2 and 10"):
@@ -37,7 +50,7 @@ class AlgorithmTests(unittest.TestCase):
 
     def test_extra_comparator_coordinates_match_average_loss_center(self):
         problem = ConflictingStochasticConstraints(dim=5)
-        np.testing.assert_allclose(problem.comparator[2:], 0.525)
+        np.testing.assert_allclose(problem.comparator[2:], 0.5)
 
     def test_constraint_stream_is_independent_of_solution_dimension(self):
         problem_2d = ConflictingStochasticConstraints(dim=2)
@@ -93,11 +106,25 @@ class AlgorithmTests(unittest.TestCase):
     def test_loss_schedule_changes_with_round_index(self):
         problem = ConflictingStochasticConstraints(dim=2)
         first_loss, _, _ = problem.sample_round(np.random.default_rng(0), round_index=1)
-        later_loss, _, _ = problem.sample_round(np.random.default_rng(0), round_index=90)
+        later_loss, _, _ = problem.sample_round(np.random.default_rng(0), round_index=45)
         probe = np.array([0.4, 0.6])
 
         self.assertNotAlmostEqual(first_loss.value(probe), later_loss.value(probe))
         self.assertFalse(np.allclose(first_loss.gradient(probe), later_loss.gradient(probe)))
+
+    def test_simple_center_and_constraint_noise_are_uniformly_bounded(self):
+        problem = GradualSlaterStochasticConstraints(dim=5, margin=0.1)
+        loss, constraint, _ = problem.sample_round(
+            np.random.default_rng(1),
+            round_index=1,
+            constraint_rng=np.random.default_rng(2),
+        )
+        base_center = np.full(5, 0.8)
+        center_noise = loss.center - base_center
+        constraint_noise = constraint.b + problem.margin
+
+        self.assertTrue(np.all(np.abs(center_noise) <= 0.10))
+        self.assertLessEqual(abs(constraint_noise), problem.noise_magnitude)
 
     def test_problem_complexity_switches_loss_and_constraints(self):
         simple = ConflictingStochasticConstraints(dim=2, complexity="simple")

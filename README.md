@@ -14,92 +14,74 @@ Install the dependencies with:
 python3 -m pip install -r requirements.txt
 ```
 
-## Run Tests
+## Run tests
 
 ```bash
-bash run/test.sh
+python3 -m unittest test_algorithms.py
 ```
 
-## Compare Algorithms
+## Run the gradual-Slater sweep
 
 ```bash
-bash run/default_experiment.sh
+bash run/gradual_slater_sweep.sh
 ```
 
-The experiment scripts accept practical COCO26 tuning parameters, a complexity
-mode, and the number of independent runs to average:
+The sweep accepts practical COCO26 tuning parameters, a complexity mode, the
+number of independent runs, the horizon, and the solution dimension:
 
 ```bash
-bash run/default_experiment.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <dim>
-bash run/high_probability_experiment.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <dim>
 bash run/gradual_slater_sweep.sh <gamma_scale> <regularizer_scale> <simple|complicated> <runs> <rounds> <dim>
 ```
 
 For example:
 
 ```bash
-bash run/default_experiment.sh 10 0.25 simple 10 8
-bash run/default_experiment.sh 20 0.1 complicated 10 10
-bash run/gradual_slater_sweep.sh 320 0.001 simple 10 10000 5
+bash run/gradual_slater_sweep.sh 200 0.01 simple 5 5000 5
 ```
 
-You can also pass custom arguments through the main runner:
+For a single custom run, invoke the Python entry point directly:
 
 ```bash
-bash run/main.sh --rounds 2000 --seed 3
+python3 main.py --problem gradual-slater --rounds 2000 --seed 3
 ```
 
 Progress is shown over all runs and rounds. Disable it when redirecting output
 or running in automation:
 
 ```bash
-bash run/main.sh --no-progress
+python3 main.py --problem gradual-slater --no-progress
 ```
 
 The comparison includes a practical tuned COCO26 curve. Its tuning knobs scale
 the paper's Lyapunov parameter `gamma_t` and the dual regularizer:
 
 ```bash
-bash run/main.sh --practical-gamma-scale 20 --practical-regularizer-scale 0.1
+python3 main.py --problem gradual-slater --practical-gamma-scale 20 --practical-regularizer-scale 0.1
 ```
 
 The Python entry point defaults to a 5-dimensional solution space, a simple
 quadratic objective with affine constraints, theorem-safe scaling, `gamma x1`, and
-`regularizer x1`. The provided experiment scripts default to the finite-horizon
-empirical setting `gamma x20` and `regularizer x0.1`, but you can override both
+`regularizer x1`. The sweep defaults to the finite-horizon empirical setting
+`gamma x200` and `regularizer x0.01`, but you can override both
 through the positional arguments above. Dimensions from 2 through 10 are supported;
 use `--complexity complicated` to opt into the composite objective.
 
-For dimensions above 2, the simple quadratic is normalized to the original 2D
-scale, the comparator uses the long-run center on extra coordinates, and the
-constraint random stream is kept independent of dimension. These choices make
-the default 5D plots comparable to the original experiment.
-
-For the high-probability parameter choice of the 2026 algorithm:
-
-```bash
-bash run/high_probability_experiment.sh
-```
-
-To see Slater's condition vanish gradually:
-
-```bash
-bash run/gradual_slater_sweep.sh
-```
+The simple objective uses the standard unnormalized quadratic
+`0.5 * ||x - center||^2`. The constraint random stream is kept independent of
+dimension so changing the solution dimension does not reshuffle the realized
+constraint sequence.
 
 The gradual-Slater sweep defaults to the finite-horizon visualization tuning
-`gamma x320` and `regularizer x0.001`. On the near-zero-margin 5D experiment,
+`gamma x200` and `regularizer x0.01`. On the near-zero-margin 5D experiment,
 this makes COCO2026 react more strongly to accumulated constraint violation and
 keeps its violation curve below the two 2017 baselines. These are empirical
 plotting defaults; the Python entry point retains the theorem-safe `x1` values.
 
-This writes cumulative and normalized plots to `./result`:
+This writes cumulative plots to `./result`:
 
 ```text
-result/regret.svg
-result/constraint_violation.svg
-result/normalized_regret.svg
-result/normalized_constraint_violation.svg
+result/regret/regret_margin_*.jpg
+result/violation/constraint_violation_margin_*.jpg
 ```
 
 The plots compare three methods:
@@ -110,24 +92,27 @@ Yu-Neely-Wei 2017 (doubling): removes horizon knowledge by restarting at epochs 
 Yu-Lee-Lee 2026 (practical): same primal-dual form with tuned finite-horizon constants.
 ```
 
-Each curve is the average over 10 independent runs by default. Shaded bands show
-the pointwise 95% confidence interval. The normalized plots divide cumulative
-regret and cumulative signed violation by the round index, which is useful for
-long-horizon convergence checks.
+Each curve is averaged over the configured independent runs. Shaded bands show
+the pointwise 95% confidence interval.
+
+Regret uses the exact empirical best fixed comparator for each run. The runner
+first realizes all simple quadratic objectives, averages their centers, and
+projects that realized mean onto the expected feasible set. Thus the comparator
+uses the complete objective sequence and can differ across coordinates and
+runs; it is not the population proxy `margin / dim`.
 
 The comparison script uses a shared synthetic stochastic constraint stream designed to
 highlight the advantage of algorithms that only require feasibility in expectation.
 Use `--complexity simple` for scheduled quadratic losses and affine constraints,
 or `--complexity complicated` for composite losses and nonlinear convex
 constraints.
-The loss functions are composite convex objectives: a nonstationary quadratic,
-a log-sum-exp of affine pieces, and a smooth absolute-value penalty. The
-quadratic center switches regimes frequently, uses faster oscillations, has
-random jitter, and sometimes jumps to a spike regime. Constraint intercepts
-include zero-mean bounded mixture noise: most rounds use moderate shocks, while
-a minority of rounds use a wider shock radius. This makes the regret and
-violation confidence bands less artificially narrow while keeping every
-objective convex and every constraint noise term centered at zero.
+In the default simple setting, all coordinates of the quadratic base center
+alternate together every 30 rounds between `0.8` and `0.2`. Each coordinate
+then receives independent noise `Uniform(-0.10, 0.10)`. The resulting center
+always lies in `[0.1, 0.9]^d`, so clipping is unnecessary. Constraint noise has the fixed distribution
+`Uniform(-noise_magnitude, noise_magnitude)`; the gradual-Slater experiments use
+`noise_magnitude=0.35`. Both noise sources are zero-mean, bounded, independent,
+and have no time-varying scales or shock mixtures.
 
 Each round samples one scalar nonlinear convex constraint. In the complicated
 setting, the sampler is time-varying: probabilities drift smoothly and enter
@@ -181,8 +166,6 @@ When `margin = 0`, Slater's condition fails. The sweep runs margins
 separate directories with margin-specific filenames:
 
 ```text
-result/gradual_slater/regret/regret_margin_*.svg
-result/gradual_slater/regret/normalized_regret_margin_*.svg
-result/gradual_slater/violation/constraint_violation_margin_*.svg
-result/gradual_slater/violation/normalized_constraint_violation_margin_*.svg
+result/regret/regret_margin_*.jpg
+result/violation/constraint_violation_margin_*.jpg
 ```

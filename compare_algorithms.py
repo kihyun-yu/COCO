@@ -20,12 +20,19 @@ Use ``main.py`` to run the experiment from the command line.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from dataclasses import dataclass
-from html import escape
 
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/coco-matplotlib")
+os.environ.setdefault("XDG_CACHE_HOME", "/tmp/coco-cache")
+
+import matplotlib
 import numpy as np
 from tqdm import tqdm
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 from algorithms import (
     COCOWithoutSlater2026,
@@ -34,6 +41,7 @@ from algorithms import (
     YuNeelyWei2017Doubling,
     YuNeelyWeiConfig,
 )
+from functions import QuadraticFunction
 from problems import make_problem
 
 
@@ -65,6 +73,7 @@ class ComparisonResult:
     labels: list[str]
     metrics: dict[str, Metrics]
     history: History
+    comparator: np.ndarray
     last_x: dict[str, np.ndarray]
     constraint_counts: np.ndarray
     expected_constraint_at_comparator: float
@@ -91,10 +100,6 @@ def save_plot(
     path: Path,
     confidence_intervals: dict[str, tuple[list[float], list[float]]] | None = None,
 ) -> None:
-    width, height = 960, 600
-    left, right, top, bottom = 110, 30, 30, 90
-    plot_width = width - left - right
-    plot_height = height - top - bottom
     colors = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c"]
 
     all_values = [float(v) for values in series.values() for v in values]
@@ -123,75 +128,39 @@ def save_plot(
     x_min = 0.0
     x_max = max(1000.0, math.ceil(float(rounds[-1]) / 1000.0) * 1000.0)
 
-    def x_coord(x: float) -> float:
-        if math.isclose(x_min, x_max):
-            return left + plot_width / 2.0
-        return left + (x - x_min) / (x_max - x_min) * plot_width
-
-    def y_coord(y: float) -> float:
-        return top + (y_max - y) / (y_max - y_min) * plot_height
-
     y_ticks = np.arange(y_min, y_max + 0.5 * y_step, y_step)
     x_ticks = np.arange(0.0, x_max + 1.0, 1000.0)
-    elements = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-        '<rect width="100%" height="100%" fill="white"/>',
-    ]
-
-    for y in y_ticks:
-        yy = y_coord(float(y))
-        elements.append(f'<line x1="{left}" y1="{yy:.2f}" x2="{width - right}" y2="{yy:.2f}" stroke="#e5e7eb"/>')
-        tick_label = str(int(round(y))) if math.isclose(y, round(y)) else f"{y:.1f}"
-        elements.append(f'<text x="{left - 12}" y="{yy + 6:.2f}" text-anchor="end" font-family="Arial" font-size="16">{tick_label}</text>')
-
-    for x in x_ticks:
-        xx = x_coord(float(x))
-        elements.append(f'<line x1="{xx:.2f}" y1="{top}" x2="{xx:.2f}" y2="{height - bottom}" stroke="#f3f4f6"/>')
-        elements.append(f'<text x="{xx:.2f}" y="{height - bottom + 28}" text-anchor="middle" font-family="Arial" font-size="16">{int(x)}</text>')
-
-    zero_y = y_coord(0.0)
-    if top <= zero_y <= height - bottom:
-        elements.append(f'<line x1="{left}" y1="{zero_y:.2f}" x2="{width - right}" y2="{zero_y:.2f}" stroke="#111827" stroke-width="1"/>')
-
-    elements.append(f'<line x1="{left}" y1="{top}" x2="{left}" y2="{height - bottom}" stroke="#111827" stroke-width="1.2"/>')
-    elements.append(f'<line x1="{left}" y1="{height - bottom}" x2="{width - right}" y2="{height - bottom}" stroke="#111827" stroke-width="1.2"/>')
-    elements.append(f'<text x="{width / 2}" y="{height - 24}" text-anchor="middle" font-family="Arial" font-size="19">Number of interactions (round)</text>')
-    elements.append(f'<text x="28" y="{height / 2}" transform="rotate(-90 28 {height / 2})" text-anchor="middle" font-family="Arial" font-size="19">{escape(ylabel)}</text>')
-
-    legend_x = left + 18
-    legend_y = top + 16
-    legend_width = 230
-    legend_height = 32 + 30 * len(series)
-    elements.append(
-        f'<rect x="{legend_x - 10}" y="{legend_y - 16}" width="{legend_width}" '
-        f'height="{legend_height}" rx="5" fill="white" fill-opacity="0.88" stroke="#d1d5db"/>'
-    )
-
+    figure, axis = plt.subplots(figsize=(12, 7.5), dpi=150)
     for idx, (label, values) in enumerate(series.items()):
         color = colors[idx % len(colors)]
         if confidence_intervals is not None and label in confidence_intervals:
             lower, upper = confidence_intervals[label]
-            upper_points = [
-                f"{x_coord(float(x)):.2f},{y_coord(float(y)):.2f}"
-                for x, y in zip(rounds, upper)
-            ]
-            lower_points = [
-                f"{x_coord(float(x)):.2f},{y_coord(float(y)):.2f}"
-                for x, y in zip(rounds[::-1], list(lower)[::-1])
-            ]
-            band_points = " ".join(upper_points + lower_points)
-            elements.append(f'<polygon points="{band_points}" fill="{color}" opacity="0.14"/>')
-        points = " ".join(
-            f"{x_coord(float(x)):.2f},{y_coord(float(y)):.2f}"
-            for x, y in zip(rounds, values)
+            axis.fill_between(rounds, lower, upper, color=color, alpha=0.14)
+        axis.plot(
+            rounds,
+            values,
+            color=color,
+            linewidth=3.0,
+            label=_plot_legend_label(label),
         )
-        elements.append(f'<polyline fill="none" stroke="{color}" stroke-width="2.4" points="{points}"/>')
-        row_y = legend_y + 12 + idx * 30
-        elements.append(f'<line x1="{legend_x}" y1="{row_y}" x2="{legend_x + 34}" y2="{row_y}" stroke="{color}" stroke-width="3"/>')
-        elements.append(f'<text x="{legend_x + 44}" y="{row_y + 6}" font-family="Arial" font-size="16">{escape(_plot_legend_label(label))}</text>')
 
-    elements.append("</svg>")
-    path.write_text("\n".join(elements), encoding="utf-8")
+    axis.set_xlim(x_min, x_max)
+    axis.set_ylim(y_min, y_max)
+    axis.set_xticks(x_ticks)
+    axis.set_yticks(y_ticks)
+    axis.set_yticklabels(
+        [str(int(round(y))) if math.isclose(y, round(y)) else f"{y:.1f}" for y in y_ticks]
+    )
+    axis.set_xlabel("Number of interactions (round)", fontsize=24, labelpad=14)
+    axis.set_ylabel(ylabel, fontsize=24, labelpad=14)
+    axis.tick_params(axis="both", labelsize=20)
+    axis.grid(True, color="#e5e7eb", linewidth=1.0)
+    axis.axhline(0.0, color="#111827", linewidth=1.2)
+    axis.legend(fontsize=20, loc="upper left", framealpha=0.88, edgecolor="#d1d5db")
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, format="jpeg", dpi=150, pil_kwargs={"quality": 95})
+    plt.close(figure)
 
 
 def _half_integer_tick_step(y_range: float) -> float:
@@ -222,11 +191,9 @@ def save_result_plots(
     result_dir: Path,
     regret_dir: Path | None = None,
     violation_dir: Path | None = None,
-    regret_filename: str = "regret.svg",
-    violation_filename: str = "constraint_violation.svg",
-    normalized_regret_filename: str = "normalized_regret.svg",
-    normalized_violation_filename: str = "normalized_constraint_violation.svg",
-) -> tuple[Path, Path, Path, Path]:
+    regret_filename: str = "regret.jpg",
+    violation_filename: str = "constraint_violation.jpg",
+) -> tuple[Path, Path]:
     regret_dir = result_dir if regret_dir is None else regret_dir
     violation_dir = result_dir if violation_dir is None else violation_dir
     regret_dir.mkdir(parents=True, exist_ok=True)
@@ -234,8 +201,6 @@ def save_result_plots(
     rounds = np.arange(1, rounds_count + 1)
     regret_path = regret_dir / regret_filename
     violation_path = violation_dir / violation_filename
-    normalized_regret_path = regret_dir / normalized_regret_filename
-    normalized_violation_path = violation_dir / normalized_violation_filename
     save_plot(
         rounds,
         result.history.regret,
@@ -250,45 +215,7 @@ def save_result_plots(
         violation_path,
         None if result.confidence_intervals is None else result.confidence_intervals.violation,
     )
-    save_plot(
-        rounds,
-        _normalize_series(result.history.regret, rounds),
-        "Average regret",
-        normalized_regret_path,
-        None
-        if result.confidence_intervals is None
-        else _normalize_confidence_intervals(result.confidence_intervals.regret, rounds),
-    )
-    save_plot(
-        rounds,
-        _normalize_series(result.history.violation, rounds),
-        "Average constraint violation",
-        normalized_violation_path,
-        None
-        if result.confidence_intervals is None
-        else _normalize_confidence_intervals(result.confidence_intervals.violation, rounds),
-    )
-    return regret_path, violation_path, normalized_regret_path, normalized_violation_path
-
-
-def _normalize_series(series: dict[str, list[float]], rounds: np.ndarray) -> dict[str, list[float]]:
-    return {
-        label: (np.asarray(values, dtype=float) / rounds).tolist()
-        for label, values in series.items()
-    }
-
-
-def _normalize_confidence_intervals(
-    confidence_intervals: dict[str, tuple[list[float], list[float]]],
-    rounds: np.ndarray,
-) -> dict[str, tuple[list[float], list[float]]]:
-    normalized: dict[str, tuple[list[float], list[float]]] = {}
-    for label, (lower, upper) in confidence_intervals.items():
-        normalized[label] = (
-            (np.asarray(lower, dtype=float) / rounds).tolist(),
-            (np.asarray(upper, dtype=float) / rounds).tolist(),
-        )
-    return normalized
+    return regret_path, violation_path
 
 
 def run_comparison(
@@ -358,7 +285,18 @@ def _run_single_comparison(
     problem = make_problem(problem_name, dim=dim, slater_margin=slater_margin, complexity=complexity)
     box = problem.feasible_set
     x0 = np.full(dim, 0.5)
-    comparator = problem.comparator
+
+    constraint_counts = np.zeros(3 if problem_name == "slater" else 2, dtype=int)
+    round_data = []
+    for round_index in range(1, rounds_count + 1):
+        loss, constraint, constraint_type = problem.sample_round(
+            loss_rng, round_index, constraint_rng=constraint_rng
+        )
+        round_data.append((loss, constraint))
+        constraint_counts[constraint_type] += 1
+    comparator = _exact_empirical_comparator(
+        [loss for loss, _ in round_data], problem_name, slater_margin
+    )
 
     # Conservative bounds for this synthetic problem.
     L = max(math.sqrt(dim), math.sqrt(2.0))
@@ -403,13 +341,7 @@ def _run_single_comparison(
         regret={label: [] for label in labels},
         violation={label: [] for label in labels},
     )
-    constraint_counts = np.zeros(3 if problem_name == "slater" else 2, dtype=int)
-
-    for round_index in range(1, rounds_count + 1):
-        loss, constraint, constraint_type = problem.sample_round(
-            loss_rng, round_index, constraint_rng=constraint_rng
-        )
-        constraint_counts[constraint_type] += 1
+    for loss, constraint in round_data:
         outputs = {
             labels[0]: alg_2017_known_t.step(loss, [constraint]),
             labels[1]: alg_2017_doubling.step(loss, [constraint]),
@@ -435,6 +367,7 @@ def _run_single_comparison(
         labels=labels,
         metrics=metrics,
         history=history,
+        comparator=comparator.copy(),
         last_x={
             labels[0]: alg_2017_known_t.x.copy(),
             labels[1]: alg_2017_doubling.x.copy(),
@@ -478,9 +411,12 @@ def _aggregate_results(results: list[ComparisonResult]) -> ComparisonResult:
         labels=labels,
         metrics=metrics,
         history=History(regret=regret_history, violation=violation_history),
+        comparator=np.mean([result.comparator for result in results], axis=0),
         last_x=last_x,
         constraint_counts=np.sum([result.constraint_counts for result in results], axis=0),
-        expected_constraint_at_comparator=first.expected_constraint_at_comparator,
+        expected_constraint_at_comparator=float(
+            np.mean([result.expected_constraint_at_comparator for result in results])
+        ),
         round_wise_feasible_region_nonempty=all(
             result.round_wise_feasible_region_nonempty for result in results
         ),
@@ -495,3 +431,51 @@ def _mean_and_ci(samples: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarra
     stderr = np.std(samples, axis=0, ddof=1) / math.sqrt(samples.shape[0])
     half_width = 1.96 * stderr
     return mean, mean - half_width, mean + half_width
+
+
+def _exact_empirical_comparator(
+    losses: list[QuadraticFunction], problem_name: str, slater_margin: float
+) -> np.ndarray:
+    """Return the exact best fixed action for the realized simple losses."""
+
+    if not losses or not all(isinstance(loss, QuadraticFunction) for loss in losses):
+        raise ValueError(
+            "exact empirical regret currently requires --complexity simple"
+        )
+    weights = np.asarray([loss.weight for loss in losses], dtype=float)
+    if np.any(weights <= 0.0):
+        raise ValueError("empirical comparator requires positive quadratic weights")
+    centers = np.stack([loss.center for loss in losses])
+    mean_center = np.average(centers, axis=0, weights=weights)
+
+    if problem_name == "slater":
+        comparator = np.clip(mean_center, 0.0, 1.0)
+        comparator[:2] = _project_onto_nonnegative_simplex(
+            comparator[:2], 0.275 / 0.35
+        )
+        return comparator
+    if problem_name == "no-slater":
+        return np.zeros_like(mean_center)
+    if problem_name == "gradual-slater":
+        return _project_onto_nonnegative_simplex(mean_center, slater_margin)
+    raise ValueError(f"unknown problem: {problem_name}")
+
+
+def _project_onto_nonnegative_simplex(vector: np.ndarray, radius: float) -> np.ndarray:
+    """Project onto {x >= 0: sum(x) <= radius}."""
+
+    if radius < 0.0:
+        raise ValueError("simplex radius must be nonnegative")
+    positive = np.maximum(np.asarray(vector, dtype=float), 0.0)
+    if float(np.sum(positive)) <= radius:
+        return positive
+    if radius == 0.0:
+        return np.zeros_like(positive)
+
+    sorted_values = np.sort(positive)[::-1]
+    cumulative = np.cumsum(sorted_values) - radius
+    indices = np.arange(1, positive.size + 1)
+    valid = sorted_values - cumulative / indices > 0.0
+    rho = int(np.flatnonzero(valid)[-1])
+    threshold = cumulative[rho] / float(rho + 1)
+    return np.maximum(positive - threshold, 0.0)

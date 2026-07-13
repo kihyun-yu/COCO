@@ -22,12 +22,9 @@ CONSTRAINT_INTERCEPT_NOISE_SCALE = 0.16
 MIN_SOLUTION_DIM = 2
 MAX_SOLUTION_DIM = 10
 DEFAULT_SOLUTION_DIM = 5
-EXTRA_COORDINATE_CENTER = 0.525
+EXTRA_COORDINATE_CENTER = 0.5
 SLATER_NOISE_MAGNITUDE = 0.35
-NOISE_SHOCK_PROBABILITY = 0.22
-NOISE_SHOCK_MULTIPLIER = 4.0
-LOSS_CENTER_JITTER_SCALE = 0.22
-LOSS_CENTER_SHOCK_PROBABILITY = 0.28
+LOSS_CENTER_NOISE_MAGNITUDE = 0.10
 LOSS_LINEAR_NOISE_SCALE = 0.42
 LOSS_LINEAR_SHOCK_PROBABILITY = 0.26
 LOSS_LINEAR_SHOCK_MULTIPLIER = 3.5
@@ -126,11 +123,8 @@ class ConflictingStochasticConstraints:
     ) -> tuple[ConvexFunction, ConvexFunction, int]:
         loss = _scheduled_loss(rng, self.dim, round_index, self.complexity)
         constraint_rng = rng if constraint_rng is None else constraint_rng
-        intercept_noise = _bounded_zero_mean_noise(
-            constraint_rng,
-            scale=_time_varying_noise_scale(CONSTRAINT_INTERCEPT_NOISE_SCALE, round_index),
-            shock_probability=NOISE_SHOCK_PROBABILITY,
-            shock_multiplier=NOISE_SHOCK_MULTIPLIER,
+        intercept_noise = _symmetric_uniform_noise(
+            constraint_rng, CONSTRAINT_INTERCEPT_NOISE_SCALE
         )
 
         constraint_type = int(
@@ -221,12 +215,7 @@ class NoSlaterStochasticConstraints:
         loss = _scheduled_loss(rng, self.dim, round_index, self.complexity)
         constraint_rng = rng if constraint_rng is None else constraint_rng
 
-        noise = _bounded_zero_mean_noise(
-            constraint_rng,
-            scale=_time_varying_noise_scale(self.noise_magnitude, round_index),
-            shock_probability=NOISE_SHOCK_PROBABILITY,
-            shock_multiplier=NOISE_SHOCK_MULTIPLIER,
-        )
+        noise = _symmetric_uniform_noise(constraint_rng, self.noise_magnitude)
         constraint = _margin_constraint(self.dim, margin=0.0, noise=noise, complexity=self.complexity)
         return loss, constraint, int(noise > 0.0)
 
@@ -275,7 +264,7 @@ class GradualSlaterStochasticConstraints:
         return float(np.sum(x) + 0.08 * np.dot(x, x) - self.margin)
 
     def round_wise_feasible_region_nonempty(self, constraint_counts: np.ndarray) -> bool:
-        if self.margin >= self.noise_magnitude * NOISE_SHOCK_MULTIPLIER:
+        if self.margin >= self.noise_magnitude:
             return True
         return int(np.asarray(constraint_counts)[1]) == 0
 
@@ -288,12 +277,7 @@ class GradualSlaterStochasticConstraints:
         loss = _scheduled_loss(rng, self.dim, round_index, self.complexity)
         constraint_rng = rng if constraint_rng is None else constraint_rng
 
-        noise = _bounded_zero_mean_noise(
-            constraint_rng,
-            scale=_time_varying_noise_scale(self.noise_magnitude, round_index),
-            shock_probability=NOISE_SHOCK_PROBABILITY,
-            shock_multiplier=NOISE_SHOCK_MULTIPLIER,
-        )
+        noise = _symmetric_uniform_noise(constraint_rng, self.noise_magnitude)
         constraint = _margin_constraint(self.dim, margin=self.margin, noise=noise, complexity=self.complexity)
         return loss, constraint, int(noise > self.margin)
 
@@ -333,8 +317,7 @@ def _scheduled_loss(
 ) -> ConvexFunction:
     center = _scheduled_center(rng, dim, round_index)
     if complexity == "simple":
-        # Match the original 2D objective scale while keeping all coordinates active.
-        return QuadraticFunction(center=center, weight=2.0 / dim)
+        return QuadraticFunction(center=center)
     return _scheduled_composite_loss(rng, dim, round_index, center)
 
 
@@ -344,39 +327,16 @@ def _scheduled_center(
     round_index: int,
 ) -> np.ndarray:
     t = max(1, int(round_index))
-    regime = (t // 30) % 4
-    centers = [
-        (0.92, 0.28),
-        (0.28, 0.92),
-        (0.88, 0.88),
-        (0.18, 0.18),
-    ]
-    center = np.full(dim, 0.5)
-    center[0], center[1] = centers[regime]
+    block = (t - 1) // 30
+    base_value = 0.8 if block % 2 == 0 else 0.2
+    center = np.full(dim, base_value)
 
-    if dim > 2:
-        for k in range(2, dim):
-            center[k] = 0.25 + 0.55 * ((regime + k) % 2)
-
-    oscillation = np.zeros(dim)
-    oscillation[0] = 0.18 * np.sin(2.0 * np.pi * t / 19.0)
-    oscillation[1] = 0.18 * np.cos(2.0 * np.pi * t / 23.0)
-    if dim > 2:
-        oscillation[2:] = 0.10 * np.sin(2.0 * np.pi * (t + np.arange(dim - 2)) / 29.0)
-
-    jitter = rng.normal(0.0, LOSS_CENTER_JITTER_SCALE, size=MAX_SOLUTION_DIM)[:dim]
-    center = center + oscillation + jitter
-
-    if rng.random() < LOSS_CENTER_SHOCK_PROBABILITY:
-        shock_sign = rng.choice([-1.0, 1.0], size=MAX_SOLUTION_DIM)[:dim]
-        shock_size = rng.uniform(0.25, 0.65, size=MAX_SOLUTION_DIM)[:dim]
-        center = center + shock_sign * shock_size
-    if t % 17 == 0:
-        center[:2] = 1.0 - center[:2]
-    if t % 53 == 0:
-        center = rng.uniform(0.0, 1.0, size=MAX_SOLUTION_DIM)[:dim]
-
-    return np.clip(center, 0.0, 1.0)
+    center_noise = rng.uniform(
+        -LOSS_CENTER_NOISE_MAGNITUDE,
+        LOSS_CENTER_NOISE_MAGNITUDE,
+        size=MAX_SOLUTION_DIM,
+    )[:dim]
+    return center + center_noise
 
 
 def _scheduled_composite_loss(
@@ -453,18 +413,10 @@ def _time_varying_noise_scale(base_scale: float, round_index: int) -> float:
     return float(base_scale * max(0.35, smooth_multiplier) * burst_multiplier)
 
 
-def _bounded_zero_mean_noise(
-    rng: np.random.Generator,
-    scale: float,
-    shock_probability: float,
-    shock_multiplier: float,
-) -> float:
-    """Bounded symmetric mixture noise with occasional larger shocks."""
+def _symmetric_uniform_noise(rng: np.random.Generator, magnitude: float) -> float:
+    """Sample simple bounded zero-mean noise from Uniform[-magnitude, magnitude]."""
 
-    width = scale
-    if rng.random() < shock_probability:
-        width = shock_multiplier * scale
-    return float(rng.uniform(-width, width))
+    return float(rng.uniform(-magnitude, magnitude))
 
 
 def _conflicting_symmetric_boundary() -> float:
