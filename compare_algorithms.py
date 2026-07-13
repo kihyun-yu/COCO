@@ -33,6 +33,7 @@ from tqdm import tqdm
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
 
 from algorithms import (
     COCOWithoutSlater2026,
@@ -156,7 +157,12 @@ def save_plot(
     axis.tick_params(axis="both", labelsize=20)
     axis.grid(True, color="#e5e7eb", linewidth=1.0)
     axis.axhline(0.0, color="#111827", linewidth=1.2)
-    axis.legend(fontsize=20, loc="upper left", framealpha=0.88, edgecolor="#d1d5db")
+    axis.legend(
+        prop=FontProperties(family="monospace", size=20),
+        loc="upper left",
+        framealpha=0.88,
+        edgecolor="#d1d5db",
+    )
     figure.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path, format="jpeg", dpi=150, pil_kwargs={"quality": 95})
