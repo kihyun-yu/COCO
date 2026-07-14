@@ -188,7 +188,7 @@ def _plot_legend_label(label: str) -> str:
     if "doubling" in label:
         return "Yu2017 (doubling)"
     if "2026" in label:
-        return "Ours (Algorithm 1)"
+        return "Ours"
     return label
 
 
