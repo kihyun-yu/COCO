@@ -61,6 +61,7 @@ class Metrics:
 class History:
     regret: dict[str, list[float]]
     violation: dict[str, list[float]]
+    trajectory: dict[str, list[list[float]]]
 
 
 @dataclass
@@ -118,7 +119,7 @@ def save_plot(
     padded_y_max = y_max + padding
 
     # Use only integer and half-integer tick values. This avoids labels such as
-    # 17.37 while retaining a consistent scale across the four plots.
+    # 17.37 while retaining a consistent scale across the three plots.
     y_step = _half_integer_tick_step(padded_y_max - padded_y_min)
     y_min = math.floor(padded_y_min / y_step) * y_step
     y_max = math.ceil(padded_y_max / y_step) * y_step
@@ -191,22 +192,122 @@ def _plot_legend_label(label: str) -> str:
     return label
 
 
+def _trajectory_suffix(label: str) -> str:
+    if "known T" in label:
+        return "yu2017_known_t"
+    if "doubling" in label:
+        return "yu2017_doubling"
+    if "2026" in label:
+        return "yu2026"
+    return "trajectory"
+
+
+def save_trajectory_plots(
+    trajectories: dict[str, list[list[float]]],
+    path: Path,
+    sample_interval: int = 20,
+) -> list[Path]:
+    """Save one unit-square plot per algorithm and return their paths."""
+
+    if sample_interval <= 0:
+        raise ValueError("sample_interval must be positive")
+
+    colors = ["#2563eb", "#dc2626", "#16a34a"]
+    paths: list[Path] = []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for idx, (label, values) in enumerate(trajectories.items()):
+        points = np.asarray(values, dtype=float)
+        if points.ndim != 2 or points.shape[1] < 2:
+            raise ValueError("trajectory plotting requires at least two dimensions")
+
+        sample_indices = list(range(0, len(points), sample_interval))
+        if sample_indices[-1] != len(points) - 1:
+            sample_indices.append(len(points) - 1)
+        sampled = points[sample_indices, :2]
+        color = colors[idx % len(colors)]
+        figure, axis = plt.subplots(figsize=(9, 9), dpi=150)
+        axis.plot(
+            sampled[:, 0],
+            sampled[:, 1],
+            color=color,
+            linewidth=2.0,
+            marker="o",
+            markersize=5.0,
+            alpha=0.85,
+        )
+        axis.scatter(
+            sampled[0, 0],
+            sampled[0, 1],
+            color=color,
+            marker="s",
+            s=90,
+            edgecolor="white",
+            linewidth=1.0,
+            zorder=4,
+        )
+        axis.scatter(
+            sampled[-1, 0],
+            sampled[-1, 1],
+            color=color,
+            marker="X",
+            s=120,
+            edgecolor="white",
+            linewidth=1.0,
+            zorder=5,
+        )
+
+        axis.set_xlim(0.0, 1.0)
+        axis.set_ylim(0.0, 1.0)
+        axis.set_aspect("equal", adjustable="box")
+        ticks = np.linspace(0.0, 1.0, 6)
+        axis.set_xticks(ticks)
+        axis.set_yticks(ticks)
+        axis.set_xlabel(r"$x_{t,0}$", fontsize=24, labelpad=12)
+        axis.set_ylabel(r"$x_{t,1}$", fontsize=24, labelpad=12)
+        axis.tick_params(axis="both", labelsize=18)
+        axis.grid(True, color="#e5e7eb", linewidth=1.0)
+        axis.set_title(
+            f"{_plot_legend_label(label)}\n"
+            f"Sampled every {sample_interval} rounds; square: start, X: end",
+            fontsize=18,
+            pad=14,
+        )
+        figure.tight_layout()
+        algorithm_path = path.with_name(
+            f"{path.stem}_{_trajectory_suffix(label)}{path.suffix}"
+        )
+        figure.savefig(
+            algorithm_path,
+            format="jpeg",
+            dpi=150,
+            pil_kwargs={"quality": 95},
+        )
+        plt.close(figure)
+        paths.append(algorithm_path)
+    return paths
+
+
 def save_result_plots(
     result: ComparisonResult,
     rounds_count: int,
     result_dir: Path,
     regret_dir: Path | None = None,
     violation_dir: Path | None = None,
+    trajectory_dir: Path | None = None,
     regret_filename: str = "regret.jpg",
     violation_filename: str = "constraint_violation.jpg",
-) -> tuple[Path, Path]:
+    trajectory_filename: str = "decision_trajectory.jpg",
+) -> tuple[Path, Path, list[Path]]:
     regret_dir = result_dir if regret_dir is None else regret_dir
     violation_dir = result_dir if violation_dir is None else violation_dir
+    trajectory_dir = result_dir if trajectory_dir is None else trajectory_dir
     regret_dir.mkdir(parents=True, exist_ok=True)
     violation_dir.mkdir(parents=True, exist_ok=True)
+    trajectory_dir.mkdir(parents=True, exist_ok=True)
     rounds = np.arange(1, rounds_count + 1)
     regret_path = regret_dir / regret_filename
     violation_path = violation_dir / violation_filename
+    trajectory_path = trajectory_dir / trajectory_filename
     save_plot(
         rounds,
         result.history.regret,
@@ -221,7 +322,12 @@ def save_result_plots(
         violation_path,
         None if result.confidence_intervals is None else result.confidence_intervals.violation,
     )
-    return regret_path, violation_path
+    trajectory_paths = save_trajectory_plots(
+        result.history.trajectory,
+        trajectory_path,
+        sample_interval=20,
+    )
+    return regret_path, violation_path, trajectory_paths
 
 
 def run_comparison(
@@ -234,7 +340,9 @@ def run_comparison(
     practical_regularizer_scale: float = 0.1,
     problem_name: str = "slater",
     slater_margin: float = 0.0,
-    complexity: str = "simple",
+    loss_switch_interval: int = 30,
+    loss_schedule: str = "complementary",
+    loss_rotation_period: int = 200,
     show_progress: bool = False,
 ) -> ComparisonResult:
     if num_runs <= 0:
@@ -259,7 +367,9 @@ def run_comparison(
                     practical_regularizer_scale=practical_regularizer_scale,
                     problem_name=problem_name,
                     slater_margin=slater_margin,
-                    complexity=complexity,
+                    loss_switch_interval=loss_switch_interval,
+                    loss_schedule=loss_schedule,
+                    loss_rotation_period=loss_rotation_period,
                     progress=progress,
                 )
             )
@@ -279,7 +389,9 @@ def _run_single_comparison(
     practical_regularizer_scale: float,
     problem_name: str,
     slater_margin: float,
-    complexity: str,
+    loss_switch_interval: int,
+    loss_schedule: str,
+    loss_rotation_period: int,
     progress: tqdm | None = None,
 ) -> ComparisonResult:
     if not 2 <= dim <= 10:
@@ -288,7 +400,14 @@ def _run_single_comparison(
     loss_seed, constraint_seed = np.random.SeedSequence(seed).spawn(2)
     loss_rng = np.random.default_rng(loss_seed)
     constraint_rng = np.random.default_rng(constraint_seed)
-    problem = make_problem(problem_name, dim=dim, slater_margin=slater_margin, complexity=complexity)
+    problem = make_problem(
+        problem_name,
+        dim=dim,
+        slater_margin=slater_margin,
+        loss_switch_interval=loss_switch_interval,
+        loss_schedule=loss_schedule,
+        loss_rotation_period=loss_rotation_period,
+    )
     box = problem.feasible_set
     x0 = np.full(dim, 0.5)
 
@@ -346,6 +465,7 @@ def _run_single_comparison(
     history = History(
         regret={label: [] for label in labels},
         violation={label: [] for label in labels},
+        trajectory={label: [] for label in labels},
     )
     for loss, constraint in round_data:
         outputs = {
@@ -364,6 +484,9 @@ def _run_single_comparison(
                 metrics[label].violation += float(out["constraint"])
             history.regret[label].append(metrics[label].regret)
             history.violation[label].append(metrics[label].violation)
+            history.trajectory[label].append(
+                np.asarray(out["x"], dtype=float).tolist()
+            )
         if progress is not None:
             progress.update(1)
 
@@ -392,6 +515,7 @@ def _aggregate_results(results: list[ComparisonResult]) -> ComparisonResult:
     num_runs = len(results)
     regret_history: dict[str, list[float]] = {}
     violation_history: dict[str, list[float]] = {}
+    trajectory_history: dict[str, list[list[float]]] = {}
     regret_ci: dict[str, tuple[list[float], list[float]]] = {}
     violation_ci: dict[str, tuple[list[float], list[float]]] = {}
     metrics: dict[str, Metrics] = {}
@@ -400,10 +524,15 @@ def _aggregate_results(results: list[ComparisonResult]) -> ComparisonResult:
     for label in labels:
         regret_samples = np.array([result.history.regret[label] for result in results], dtype=float)
         violation_samples = np.array([result.history.violation[label] for result in results], dtype=float)
+        trajectory_samples = np.array(
+            [result.history.trajectory[label] for result in results], dtype=float
+        )
         regret_mean, regret_lower, regret_upper = _mean_and_ci(regret_samples)
         violation_mean, violation_lower, violation_upper = _mean_and_ci(violation_samples)
+        trajectory_mean = np.mean(trajectory_samples, axis=0)
         regret_history[label] = regret_mean.tolist()
         violation_history[label] = violation_mean.tolist()
+        trajectory_history[label] = trajectory_mean.tolist()
         regret_ci[label] = (regret_lower.tolist(), regret_upper.tolist())
         violation_ci[label] = (violation_lower.tolist(), violation_upper.tolist())
         metrics[label] = Metrics(
@@ -416,7 +545,11 @@ def _aggregate_results(results: list[ComparisonResult]) -> ComparisonResult:
     return ComparisonResult(
         labels=labels,
         metrics=metrics,
-        history=History(regret=regret_history, violation=violation_history),
+        history=History(
+            regret=regret_history,
+            violation=violation_history,
+            trajectory=trajectory_history,
+        ),
         comparator=np.mean([result.comparator for result in results], axis=0),
         last_x=last_x,
         constraint_counts=np.sum([result.constraint_counts for result in results], axis=0),
@@ -428,7 +561,10 @@ def _aggregate_results(results: list[ComparisonResult]) -> ComparisonResult:
         ),
         problem_name=first.problem_name,
         num_runs=num_runs,
-        confidence_intervals=ConfidenceIntervals(regret=regret_ci, violation=violation_ci),
+        confidence_intervals=ConfidenceIntervals(
+            regret=regret_ci,
+            violation=violation_ci,
+        ),
     )
 
 
@@ -442,12 +578,10 @@ def _mean_and_ci(samples: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarra
 def _exact_empirical_comparator(
     losses: list[QuadraticFunction], problem_name: str, slater_margin: float
 ) -> np.ndarray:
-    """Return the exact best fixed action for the realized simple losses."""
+    """Return the exact best fixed action for the realized quadratic losses."""
 
     if not losses or not all(isinstance(loss, QuadraticFunction) for loss in losses):
-        raise ValueError(
-            "exact empirical regret currently requires --complexity simple"
-        )
+        raise ValueError("empirical comparator requires quadratic losses")
     weights = np.asarray([loss.weight for loss in losses], dtype=float)
     if np.any(weights <= 0.0):
         raise ValueError("empirical comparator requires positive quadratic weights")

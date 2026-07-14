@@ -123,15 +123,86 @@ class AlgorithmTests(unittest.TestCase):
             )
             centers.append(loss.center)
 
-        np.testing.assert_allclose(centers[0], np.full(5, 0.8))
-        np.testing.assert_allclose(centers[1], np.full(5, 0.8))
-        np.testing.assert_allclose(centers[2], np.full(5, 0.2))
-        np.testing.assert_allclose(centers[3], np.full(5, 0.2))
-        np.testing.assert_allclose(centers[4], centers[0])
+        np.testing.assert_allclose(centers[0], [0.8, 0.2, 0.2, 0.2, 0.2])
+        np.testing.assert_allclose(centers[1], centers[0])
+        np.testing.assert_allclose(centers[2], [0.2, 0.8, 0.8, 0.8, 0.8])
+        np.testing.assert_allclose(centers[3], centers[2])
+        np.testing.assert_allclose(centers[4], [0.2, 0.8, 0.2, 0.2, 0.2])
 
         first_a, _, _ = problem.sample_round(np.random.default_rng(10), round_index=1)
         first_b, _, _ = problem.sample_round(np.random.default_rng(20), round_index=1)
         np.testing.assert_allclose(first_a.center, first_b.center)
+
+    def test_loss_switch_interval_is_configurable(self):
+        problem = GradualSlaterStochasticConstraints(
+            dim=2, margin=0.1, loss_switch_interval=2
+        )
+        centers = [
+            problem.sample_round(np.random.default_rng(0), round_index=t)[0].center
+            for t in range(1, 6)
+        ]
+
+        np.testing.assert_allclose(centers[0], [0.8, 0.2])
+        np.testing.assert_allclose(centers[1], [0.8, 0.2])
+        np.testing.assert_allclose(centers[2], [0.2, 0.8])
+        np.testing.assert_allclose(centers[3], [0.2, 0.8])
+        np.testing.assert_allclose(centers[4], [0.8, 0.2])
+
+    def test_loss_switch_interval_must_be_positive(self):
+        with self.assertRaisesRegex(ValueError, "loss_switch_interval must be positive"):
+            GradualSlaterStochasticConstraints(loss_switch_interval=0)
+
+    def test_higher_dimensional_center_schedule_is_balanced(self):
+        problem = GradualSlaterStochasticConstraints(
+            dim=3, margin=0.1, loss_switch_interval=1
+        )
+        centers = np.stack([
+            problem.sample_round(np.random.default_rng(0), round_index=t)[0].center
+            for t in range(1, 7)
+        ])
+
+        np.testing.assert_allclose(np.mean(centers, axis=0), np.full(3, 0.5))
+        self.assertEqual(len(np.unique(centers, axis=0)), 6)
+
+    def test_sinusoidal_schedule_rotates_in_two_dimensions(self):
+        problem = GradualSlaterStochasticConstraints(
+            dim=2,
+            margin=0.1,
+            loss_schedule="sinusoidal",
+            loss_rotation_period=200,
+        )
+        centers = [
+            problem.sample_round(np.random.default_rng(0), round_index=t)[0].center
+            for t in (1, 51, 101, 151)
+        ]
+
+        np.testing.assert_allclose(centers[0], [0.8, 0.5], atol=1e-12)
+        np.testing.assert_allclose(centers[1], [0.5, 0.8], atol=1e-12)
+        np.testing.assert_allclose(centers[2], [0.2, 0.5], atol=1e-12)
+        np.testing.assert_allclose(centers[3], [0.5, 0.2], atol=1e-12)
+
+    def test_sinusoidal_schedule_is_balanced_in_higher_dimensions(self):
+        period = 120
+        problem = GradualSlaterStochasticConstraints(
+            dim=5,
+            margin=0.1,
+            loss_schedule="sinusoidal",
+            loss_rotation_period=period,
+        )
+        centers = np.stack([
+            problem.sample_round(np.random.default_rng(0), round_index=t)[0].center
+            for t in range(1, period + 1)
+        ])
+
+        self.assertTrue(np.all(centers >= 0.2 - 1e-12))
+        self.assertTrue(np.all(centers <= 0.8 + 1e-12))
+        np.testing.assert_allclose(np.mean(centers, axis=0), np.full(5, 0.5))
+
+    def test_loss_schedule_parameters_are_validated(self):
+        with self.assertRaisesRegex(ValueError, "loss_schedule must be one of"):
+            GradualSlaterStochasticConstraints(loss_schedule="unknown")
+        with self.assertRaisesRegex(ValueError, "loss_rotation_period must be positive"):
+            GradualSlaterStochasticConstraints(loss_rotation_period=0)
 
     def test_constraint_noise_is_uniformly_bounded(self):
         problem = GradualSlaterStochasticConstraints(dim=5, margin=0.1)
@@ -143,19 +214,6 @@ class AlgorithmTests(unittest.TestCase):
         constraint_noise = constraint.b + problem.margin
 
         self.assertLessEqual(abs(constraint_noise), problem.noise_magnitude)
-
-    def test_problem_complexity_switches_loss_and_constraints(self):
-        simple = ConflictingStochasticConstraints(dim=2, complexity="simple")
-        complicated = ConflictingStochasticConstraints(dim=2, complexity="complicated")
-        simple_loss, simple_constraint, _ = simple.sample_round(np.random.default_rng(1), round_index=1)
-        complicated_loss, complicated_constraint, _ = complicated.sample_round(
-            np.random.default_rng(1), round_index=1
-        )
-
-        self.assertIsInstance(simple_loss, QuadraticFunction)
-        self.assertIsInstance(simple_constraint, AffineFunction)
-        self.assertNotIsInstance(complicated_loss, QuadraticFunction)
-        self.assertNotIsInstance(complicated_constraint, AffineFunction)
 
     def test_no_slater_problem_has_only_boundary_feasible_comparator(self):
         problem = NoSlaterStochasticConstraints(dim=2)

@@ -17,11 +17,17 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rounds", type=int, default=1000)
     parser.add_argument("--runs", type=int, default=5)
-    parser.add_argument("--dim", type=int, choices=range(2, 11), default=5)
+    parser.add_argument("--dim", type=int, choices=range(2, 11), default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--problem", choices=["slater", "no-slater", "gradual-slater"], default="slater")
-    parser.add_argument("--complexity", choices=["simple", "complicated"], default="simple")
     parser.add_argument("--slater-margin", type=float, default=0.0)
+    parser.add_argument("--loss-switch-interval", type=int, default=30)
+    parser.add_argument(
+        "--loss-schedule",
+        choices=["complementary", "sinusoidal"],
+        default="complementary",
+    )
+    parser.add_argument("--loss-rotation-period", type=int, default=200)
     parser.add_argument("--high-probability", action="store_true")
     parser.add_argument("--practical-gamma-scale", type=float, default=1.0)
     parser.add_argument("--practical-regularizer-scale", type=float, default=1.0)
@@ -29,8 +35,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-dir", type=Path, default=Path("result"))
     parser.add_argument("--regret-dir", type=Path, default=None)
     parser.add_argument("--violation-dir", type=Path, default=None)
+    parser.add_argument("--trajectory-dir", type=Path, default=None)
     parser.add_argument("--regret-filename", default="regret.jpg")
     parser.add_argument("--violation-filename", default="constraint_violation.jpg")
+    parser.add_argument("--trajectory-filename", default="decision_trajectory.jpg")
     return parser.parse_args()
 
 
@@ -84,23 +92,30 @@ def main() -> None:
         practical_regularizer_scale=args.practical_regularizer_scale,
         problem_name=args.problem,
         slater_margin=args.slater_margin,
-        complexity=args.complexity,
+        loss_switch_interval=args.loss_switch_interval,
+        loss_schedule=args.loss_schedule,
+        loss_rotation_period=args.loss_rotation_period,
         show_progress=not args.no_progress,
     )
-    regret_path, violation_path = save_result_plots(
+    regret_path, violation_path, trajectory_paths = save_result_plots(
         result,
         args.rounds,
         args.result_dir,
         regret_dir=args.regret_dir,
         violation_dir=args.violation_dir,
+        trajectory_dir=args.trajectory_dir,
         regret_filename=args.regret_filename,
         violation_filename=args.violation_filename,
+        trajectory_filename=args.trajectory_filename,
     )
 
     counts = result.constraint_counts
     print(
         f"rounds={args.rounds} runs={args.runs} dim={args.dim} seed={args.seed} "
-        f"problem={args.problem} complexity={args.complexity} slater_margin={args.slater_margin}"
+        f"problem={args.problem} slater_margin={args.slater_margin} "
+        f"loss_schedule={args.loss_schedule} "
+        f"loss_switch_interval={args.loss_switch_interval} "
+        f"loss_rotation_period={args.loss_rotation_period}"
     )
     if args.problem == "slater":
         print(
@@ -131,6 +146,8 @@ def main() -> None:
         print(summarize(label, result.metrics[label], result.last_x[label]))
     print(f"saved_regret_plot={regret_path}")
     print(f"saved_constraint_violation_plot={violation_path}")
+    for trajectory_path in trajectory_paths:
+        print(f"saved_decision_trajectory_plot={trajectory_path}")
 
 
 if __name__ == "__main__":
